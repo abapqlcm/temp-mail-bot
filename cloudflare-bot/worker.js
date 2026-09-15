@@ -8,7 +8,7 @@
  * Commands: /start panel; inline buttons for everything.
  */
 
-const DOMAIN = "YOUR_DOMAIN"; // ← بعد از دیپلوی از var تنظیم می‌شود، این فقط fallback
+const DOMAINS = ["mesterio.life", "iprez.dpdns.org"];
 
 // ---------- helpers ----------
 const esc = (t) => (t || "").toString()
@@ -41,13 +41,20 @@ const answer = (env, id, text) => tg(env, "answerCallbackQuery", {
 // ---------- main panel ----------
 function mainPanelKB() {
   return [[
-    { text: "🎲 Random", callback_data: "new:random" },
-    { text: "✏️ Custom", callback_data: "new:custom" },
+    { text: "🎲 Random", callback_data: "dom:new:random" },
+    { text: "✏️ Custom", callback_data: "dom:new:custom" },
   ], [
     { text: "📬 My Email", callback_data: "myemail" },
   ], [
     { text: "🧑‍💼 Admin", callback_data: "admin" },
   ]];
+}
+
+// انتخاب دامنه — اولین قدم ساخت آدرس
+function domainKB(action, mode) {
+  const kb = DOMAINS.map(d => [{ text: `🌐 @${d}`, callback_data: `pick:${action}:${mode}:${d}` }]);
+  kb.push([{ text: "🏠 Panel", callback_data: "home" }]);
+  return kb;
 }
 
 function panelText(addrCount, domain) {
@@ -98,7 +105,7 @@ const randLocal = () => {
   return s;
 };
 
-async function createAddress(env, db, userId, local) {
+async function createAddress(env, db, userId, local, domain) {
   local = (local || "").trim().toLowerCase();
   if (local) {
     if (!/^[a-z0-9][a-z0-9._-]{2,29}$/.test(local)) {
@@ -107,7 +114,8 @@ async function createAddress(env, db, userId, local) {
   } else {
     local = randLocal();
   }
-  const domain = env.MAIL_DOMAIN || DOMAIN;
+  domain = (domain || env.MAIL_DOMAIN || DOMAINS[0]).toLowerCase();
+  if (!DOMAINS.includes(domain)) return { error: "⛔️ دامنه نامعتبر." };
   const address = `${local}@${domain}`;
   try {
     await db.prepare(
@@ -123,7 +131,6 @@ async function createAddress(env, db, userId, local) {
 }
 
 // set at request time from env
-let envDomain = DOMAIN;
 
 // ---------- inbox view ----------
 async function inboxText(db, address) {
@@ -161,7 +168,7 @@ async function myEmailView(db, userId) {
   if (!rows.results || !rows.results.length) {
     return {
       text: "📬 <b>My Email</b>\n\nهنوز آدرسی نداری. اول با 🎲 یا ✏️ یکی بساز!",
-      kb: [[{ text: "🎲 Random", callback_data: "new:random" }], [{ text: "🏠 Panel", callback_data: "home" }]],
+      kb: [[{ text: "🎲 Random", callback_data: "dom:new:random" }], [{ text: "🏠 Panel", callback_data: "home" }]],
     };
   }
   const kb = [];
@@ -220,7 +227,6 @@ async function handleRename(env, db, chatId, userId, text) {
 
 // ---------- command handlers ----------
 async function handleUpdate(env, upd) {
-  envDomain = env.MAIL_DOMAIN || DOMAIN;
   envAdmins = env.ADMIN_IDS || "";
   const db = env.DB;
   await initDB(db);
@@ -234,26 +240,24 @@ async function handleUpdate(env, upd) {
 
   if (text.startsWith("/start")) {
     const c = await db.prepare("SELECT COUNT(*) c FROM addresses WHERE user_id = ?").bind(userId).first();
-    return sendMsg(env, chatId, panelText(c.c, envDomain), mainPanelKB());
+    return sendMsg(env, chatId, panelText(c.c, DOMAINS.join(", ")), mainPanelKB());
   }
 
   // /make name — custom address
   const mk = text.match(/^\/make\s+([^\s@]+)(?:@([^\s]+))?/i);
-  if (mk) {
-    const res = await createAddress(env, db, userId, mk[1]);
+  const mkDomain = mk && mk[2] && DOMAINS.includes(mk[2].toLowerCase()) ? mk[2].toLowerCase() : null;
+  if (mk && mk[2] && !mkDomain) return sendMsg(env, chatId, "⛔️ دامنه مجاز نیست. دامنه‌های موجود: " + DOMAINS.join(", "));
+  if (mk && mk[1]) {
+    const res = await createAddress(env, db, userId, mk[1], mkDomain);
     if (res.error) return sendMsg(env, chatId, res.error);
     return sendMsg(env, chatId,
       `✅ آدرس ساخته شد:\n<code>${esc(res.address)}</code>\n\n📬 از <b>My Email</b> بهش دسترسی داری — همیشه فعال می‌مونه.`,
       [[{ text: "📥 باز کردن Inbox", callback_data: `inbox:${res.address}` }], [{ text: "📬 My Email", callback_data: "myemail" }]]);
   }
 
-  // /new — random
+  // /new — به پنل با انتخاب دامنه هدایت
   if (text.startsWith("/new")) {
-    const res = await createAddress(env, db, userId, "");
-    if (res.error) return sendMsg(env, chatId, res.error);
-    return sendMsg(env, chatId,
-      `✅ آدرس تصادفی:\n<code>${esc(res.address)}</code>`,
-      [[{ text: "📥 باز کردن Inbox", callback_data: `inbox:${res.address}` }], [{ text: "📬 My Email", callback_data: "myemail" }]]);
+    return sendMsg(env, chatId, "🌐 اول دامنه رو انتخاب کن:", domainKB("new", "random"));
   }
 
   // /rename id newname
@@ -283,7 +287,7 @@ async function handleUpdate(env, upd) {
     return sendMsg(env, chatId, `🆔 Your ID: <code>${userId}</code>`);
   }
 
-  return sendMsg(env, chatId, panelText("·", envDomain), mainPanelKB());
+  return sendMsg(env, chatId, panelText("·", DOMAINS.join(", ")), mainPanelKB());
 }
 
 async function handleCallback(env, db, q) {
@@ -302,20 +306,30 @@ async function handleCallback(env, db, q) {
   try {
     if (data === "home") {
       const c = await db.prepare("SELECT COUNT(*) c FROM addresses WHERE user_id = ?").bind(userId).first();
-      return await edit(panelText(c.c, envDomain), mainPanelKB());
+      return await edit(panelText(c.c, DOMAINS.join(", ")), mainPanelKB());
     }
 
-    if (data === "new:random") {
-      const res = await createAddress(env, db, userId, "");
-      if (res.error) { await answer(env, q.id, res.error); return await edit(res.error, mainPanelKB()); }
-      await answer(env, q.id, "✅ ساخته شد!");
-      return await edit(`✅ آدرس تصادفی:\n<code>${esc(res.address)}</code>`,
-        [[{ text: "📥 باز کردن Inbox", callback_data: `inbox:${res.address}` }], [{ text: "🏠 Panel", callback_data: "home" }]]);
-    }
-
-    if (data === "new:custom") {
+    if (data.startsWith("dom:")) {
+      // نمایش انتخاب دامنه
+      const [, action, mode] = data.split(":");
       return await edit(
-        "✏️ <b>Custom Address</b>\n\nاسم دلخواهت رو با این فرمت بفرست:\n<code>/make myname</code>\n\nمثلاً: <code>/make rez.test</code> → <code>rez.test@" + esc(envDomain) + "</code>",
+        mode === "random" ? "🌐 برای آدرس تصادفی، دامنه رو انتخاب کن:" : "🌐 برای آدرس دلخواه، دامنه رو انتخاب کن:",
+        domainKB(action, mode));
+    }
+
+    if (data.startsWith("pick:")) {
+      // pick:action:mode:domain
+      const [, action, mode, domain] = data.split(":");
+      if (mode === "random") {
+        const res = await createAddress(env, db, userId, "", domain);
+        if (res.error) { await answer(env, q.id, res.error); return await edit(res.error, mainPanelKB()); }
+        await answer(env, q.id, "✅ ساخته شد!");
+        return await edit(`✅ آدرس تصادفی:\n<code>${esc(res.address)}</code>`,
+          [[{ text: "📥 باز کردن Inbox", callback_data: `inbox:${res.address}` }], [{ text: "🏠 Panel", callback_data: "home" }]]);
+      }
+      // custom: راهنمای /make با دامنه انتخابی
+      return await edit(
+        `✏️ <b>Custom روی @${esc(domain)}</b>\n\nاسم دلخواهت رو بفرست:\n<code>/make myname@${esc(domain)}</code>`,
         [[{ text: "🏠 Panel", callback_data: "home" }]]);
     }
 
@@ -379,8 +393,48 @@ async function handleCallback(env, db, q) {
 
 // ---------- email receiving (Cloudflare Email Routing) ----------
 function decodeQuotedPrintable(s) {
-  return s.replace(/=\r?\n/g, "").replace(/=([0-9A-F]{2})/gi,
-    (_, h) => String.fromCharCode(parseInt(h, 16)));
+  // بایت‌محور. =XX فقط وقتی decode شه که context نشونه انکودینگ واقعی باشه:
+  // UTF-8 lead bytes (>=C2) همیشه decode؛ else اگر بعدش URL-safe نیاد decode، وگرنه literal (=).
+  const bytes = [];
+  let i = 0;
+  const clean = s.replace(/=\r?\n/g, "");
+  while (i < clean.length) {
+    const c = clean[i];
+    if (c === "=" && /^[0-9A-Fa-f]{2}$/.test(clean.substr(i + 1, 2))) {
+      const pair = clean.substr(i + 1, 2);
+      const val = parseInt(pair, 16);
+      const after = clean[i + 3];
+      const afterUrlish = after !== undefined && /[A-Za-z0-9\-._~]/.test(after);
+      const isUtf8Lead = val >= 0xC2; // UTF-8 continuation/lead — هرگز در URL به این شکل از = شروع نمی‌شه
+      const isControl = val < 0x20 || val === 0x3D; // newline, tab, =3D escaped '='
+      if (isUtf8Lead || isControl || !afterUrlish) {
+        bytes.push(val); i += 3; continue;
+      }
+      bytes.push(c.charCodeAt(0) & 0xff); i++; // literal '=' (URL مثل token=abc123)
+    } else {
+      bytes.push(clean.charCodeAt(i) & 0xff);
+      i++;
+    }
+  }
+  try { return new TextDecoder().decode(Uint8Array.from(bytes)); } catch { return clean; }
+}
+
+function htmlToText(html) {
+  let t = html;
+  // لینک‌ها: متن + URL نگه داشته شه
+  t = t.replace(/<a\s[^>]*href\s*=\s*"([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    (_, href, txt) => {
+      const clean = txt.replace(/<[^>]+>/g, "").trim();
+      return clean ? `${clean} (${href})` : href;
+    });
+  t = t.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|h[1-6]|li|tr|table)>/gi, "\n");
+  t = t.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "");
+  t = t.replace(/<[^>]+>/g, "");
+  t = t.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
+       .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+       .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n));
+  t = t.replace(/[ \t]+/g, " ").replace(/\n\s*\n\s*\n+/g, "\n\n");
+  return t.trim();
 }
 
 function parseEmail(raw) {
@@ -393,31 +447,66 @@ function parseEmail(raw) {
     return m ? m[1].replace(/\r?\n[ \t]+/g, " ").trim() : "";
   };
 
-  // decode base64 or QP transfer encoding
-  const cte = (getHeader("Content-Transfer-Encoding") || "").toLowerCase();
+  const decodeBody = (part) => {
+    const cte = (part.match(/Content-Transfer-Encoding:\s*(\S+)/i) || [])[1] || "";
+    // بدنه part بعد از اولین \r\n\r\n (هدر part جدا می‌شه)
+    const pEnd = part.indexOf("\r\n\r\n") !== -1 ? part.indexOf("\r\n\r\n") : part.indexOf("\n\n");
+    let out = pEnd !== -1 ? part.slice(pEnd).trim() : part.trim();
+    if (/base64/i.test(cte)) {
+      try {
+        const b64 = out.replace(/[^A-Za-z0-9+/=]/g, "");
+        const bin = atob(b64.slice(0, Math.floor(b64.length / 4) * 4));
+        out = new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+      } catch { /* keep */ }
+    } else if (/quoted-printable/i.test(cte)) {
+      out = decodeQuotedPrintable(out);
+    }
+    // مرزبند: اگر part با --boundary دیگری ادامه پیدا کرده بود، برش بزن (دیفنس در عمق)
+    return out;
+  };
 
-  // try to find a text/plain part in multipart
-  const plain = body.match(/Content-Type:\s*text\/plain[\s\S]*?\r?\n\r?\n([\s\S]*?)(?=\r?\n--|\s*$)/i);
-  let picked = plain ? plain[1] : body;
-  const partCte = (picked.match(/Content-Transfer-Encoding:\s*(\S+)/i) || [])[1] || cte;
-  if (/base64/i.test(partCte)) {
-    try {
-      const b64 = picked.replace(/[^A-Za-z0-9+/=]/g, "");
-      const bin = atob(b64.slice(0, Math.floor(b64.length / 4) * 4));
-      // UTF-8 safe decode
-      picked = new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
-    } catch { /* keep as is */ }
-  } else if (/quoted-printable/i.test(partCte)) {
-    picked = decodeQuotedPrintable(picked);
+  // split multipart — boundary در هدر بالاست (یا در body برای nested)
+  const bMatch = (getHeader("Content-Type").match(/boundary\s*=\s*"?([^";\r\n]+)"?/i)
+    || body.match(/boundary\s*=\s*"?([^";\r\n]+)"?/i));
+  let textPlain = null, textHtml = null;
+
+  if (bMatch) {
+    const boundary = bMatch[1];
+    const parts = body.split("--" + boundary);
+    for (const p of parts.slice(1)) {
+      if (p.startsWith("--")) break; // end marker
+      // part ممکنه حاوی boundary بعدی هم باشه — برش تا اولین boundary داخلی
+      const part = p.replace(/\r\n--\r?\n?[\s\S]*$/, "").replace(/\n--[^\n]*[\s\S]*$/, "");
+      if (/Content-Type:\s*text\/plain/i.test(part) && textPlain === null) textPlain = decodeBody(part);
+      else if (/Content-Type:\s*text\/html/i.test(part) && textHtml === null) textHtml = decodeBody(part);
+      else if (/Content-Type:\s*multipart/i.test(p)) {
+        // nested multipart (e.g. multipart/alternative داخل related)
+        const nested = p.match(/boundary\s*=\s*"?([^";\r\n]+)"?/i);
+        if (nested) {
+          for (const np of p.split("--" + nested[1]).slice(1)) {
+            if (/Content-Type:\s*text\/plain/i.test(np) && textPlain === null) textPlain = decodeBody(np);
+            else if (/Content-Type:\s*text\/html/i.test(np) && textHtml === null) textHtml = decodeBody(np);
+          }
+        }
+      }
+    }
+  } else {
+    // non-multipart: کل بدنه
+    const ct = getHeader("Content-Type") || "";
+    if (/text\/html/i.test(ct)) textHtml = decodeBody(body);
+    else textPlain = decodeBody(body);
   }
-  // strip remaining base64 header noise if multipart fallback
-  if (plain) picked = picked.replace(/^[\s\S]*?\r?\n\r?\n/, "");
-  picked = picked.replace(/\r\n/g, "\n").trim().slice(0, 4000);
+
+  let picked = textPlain !== null ? textPlain.trim() : null;
+  if ((!picked || picked.length < 5) && textHtml !== null) {
+    picked = htmlToText(textHtml);
+  }
+  picked = (picked || "").replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 3500);
 
   return {
     from: getHeader("From"),
     subject: decodeMimeWords(getHeader("Subject")),
-    body: picked,
+    body: picked || "(بدون متن قابل نمایش)",
   };
 }
 
@@ -434,7 +523,6 @@ function decodeMimeWords(s) {
 }
 
 async function handleEmail(env, message) {
-  envDomain = env.MAIL_DOMAIN || DOMAIN;
   const db = env.DB;
   await initDB(db);
 
@@ -463,8 +551,7 @@ async function handleEmail(env, message) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    envDomain = env.MAIL_DOMAIN || DOMAIN;
-    envAdmins = env.ADMIN_IDS || "";
+      envAdmins = env.ADMIN_IDS || "";
 
     if (url.pathname === "/health") return new Response("ok");
 

@@ -39,7 +39,7 @@ function mockDB() {
 const sent = [];
 const env = {
   BOT_TOKEN: "123:fake",
-  MAIL_DOMAIN: "mail.test.ir",
+  MAIL_DOMAIN: "mesterio.life",
   ADMIN_IDS: "999",
   DB: mockDB(),
 };
@@ -63,27 +63,29 @@ const assert = (name, cond) => console.log((cond ? "✅" : "❌ FAIL") + " " + n
 await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/start" } }).request, env);
 assert("start panel", sent.at(-1).text.includes("Temp Mail Panel"));
 
-// 2. random address
-await worker.fetch(upd({ callback_query: { id: "c1", from: { id: 1 }, data: "new:random", message: { chat: { id: 1 }, message_id: 5 } } }).request, env);
-assert("random create", sent.at(-1).text.includes("آدرس تصادفی") && sent.at(-1).text.includes("@mail.test.ir"));
+// 2. domain picker → random on first domain
+await worker.fetch(upd({ callback_query: { id: "c0", from: { id: 1 }, data: "dom:new:random", message: { chat: { id: 1 }, message_id: 4 } } }).request, env);
+assert("domain picker shown", sent.at(-1).text.includes("دامنه") && JSON.stringify(sent.at(-1)).includes("pick:new:random:mesterio.life"));
+await worker.fetch(upd({ callback_query: { id: "c1", from: { id: 1 }, data: "pick:new:random:mesterio.life", message: { chat: { id: 1 }, message_id: 5 } } }).request, env);
+assert("random create", sent.at(-1).text.includes("آدرس تصادفی") && sent.at(-1).text.includes("@mesterio.life"));
 const addr1 = sent.at(-1).text.match(/<code>([^<]+)<\/code>/)[1];
 
-// 3. custom address
-await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make rez.custom" } }).request, env);
-assert("custom create", sent.at(-1).text.includes("rez.custom@mail.test.ir"));
+// 3. custom address on second domain
+await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make rez.custom@iprez.dpdns.org" } }).request, env);
+assert("custom create", sent.at(-1).text.includes("rez.custom@iprez.dpdns.org"));
 
 // 4. invalid custom
 await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make x" } }).request, env);
 assert("invalid name rejected", sent.at(-1).text.includes("❌"));
 
 // 5. duplicate
-await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make rez.custom" } }).request, env);
+await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make rez.custom@iprez.dpdns.org" } }).request, env);
 assert("duplicate rejected", sent.at(-1).text.includes("قبلاً گرفته شده"));
 
 // 6. myemail lists 2 addresses
 await worker.fetch(upd({ callback_query: { id: "c2", from: { id: 1 }, data: "myemail", message: { chat: { id: 1 }, message_id: 6 } } }).request, env);
 const meText = JSON.stringify(sent.at(-1));
-assert("myemail shows both", meText.includes(addr1) && meText.includes("rez.custom@mail.test.ir"));
+assert("myemail shows both", meText.includes(addr1) && meText.includes("rez.custom@iprez.dpdns.org"));
 
 // 7. inbound email to addr1 → notify owner 1
 const emailMsg = { to: addr1, from: "svc@example.com", raw: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("From: svc@example.com\r\nSubject: OTP 8899\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nYour code: 8899")); c.close(); } }) };
@@ -92,7 +94,7 @@ assert("owner notified", sent.at(-1).chat_id === 1 && sent.at(-1).text.includes(
 
 // 8. inbound to unknown address → no notify to user 2
 sent.length = 0;
-await worker.email({ to: "nobody@mail.test.ir", raw: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("Subject: hi\r\n\r\nx")); c.close(); } }) }, env);
+await worker.email({ to: "nobody@mesterio.life", raw: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("Subject: hi\r\n\r\nx")); c.close(); } }) }, env);
 assert("unknown dropped silently", sent.length === 0);
 
 // 9. inbox of addr1 shows mail
