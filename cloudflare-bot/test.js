@@ -61,7 +61,7 @@ const assert = (name, cond) => console.log((cond ? "✅" : "❌ FAIL") + " " + n
 
 // 1. /start
 await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/start" } }).request, env);
-assert("start panel", sent.at(-1).text.includes("Temp Mail Panel"));
+assert("start panel", sent.at(-1).text.includes("Temp Mail"));
 
 // 2. domain picker → random on first domain
 await worker.fetch(upd({ callback_query: { id: "c0", from: { id: 1 }, data: "dom:new:random", message: { chat: { id: 1 }, message_id: 4 } } }).request, env);

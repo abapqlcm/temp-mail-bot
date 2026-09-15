@@ -39,15 +39,15 @@ const answer = (env, id, text) => tg(env, "answerCallbackQuery", {
 });
 
 // ---------- main panel ----------
-function mainPanelKB() {
-  return [[
+function mainPanelKB(isAdmin = false) {
+  const kb = [[
     { text: "🎲 Random", callback_data: "dom:new:random" },
     { text: "✏️ Custom", callback_data: "dom:new:custom" },
   ], [
     { text: "📬 My Email", callback_data: "myemail" },
-  ], [
-    { text: "🧑‍💼 Admin", callback_data: "admin" },
   ]];
+  // پنل ادمین فقط با /panel — در منوی اصلی نیست
+  return kb;
 }
 
 // انتخاب دامنه — اولین قدم ساخت آدرس
@@ -57,14 +57,16 @@ function domainKB(action, mode) {
   return kb;
 }
 
-function panelText(addrCount, domain) {
-  return `📬 <b>Temp Mail Panel</b>\n` +
-    `🌐 Domain: <code>@${esc(domain)}</code>\n` +
-    `📮 آدرس‌های فعال شما: <b>${addrCount}</b>\n\n` +
+function panelText(addrCount, domains) {
+  return `╭─────────────────────\n` +
+    `┃ 📬 <b>Temp Mail</b>\n` +
+    `┃ 🌐 دامنه‌ها: <code>${esc(domains)}</code>\n` +
+    `┃ 📮 آدرس‌های شما: <b>${addrCount}</b>\n` +
+    `╰─────────────────────\n\n` +
     `🎲 <b>Random</b> — آدرس تصادفی بساز\n` +
     `✏️ <b>Custom</b> — با اسم دلخواه بساز\n` +
-    `📬 <b>My Email</b> — لیست همه آدرس‌هات و سوییچ بین‌شون\n` +
-    `🧑‍💼 <b>Admin</b> — پنل مدیریت (فقط ادمین)`;
+    `📬 <b>My Email</b> — همه آدرس‌هات و اینباکس‌ها\n\n` +
+    `💡 ایمیل که بیاد فوری خبر می‌دم؛ لینک‌های Confirm دکمه می‌شن — تپ کن باز شه!`;
 }
 
 // ---------- DB init ----------
@@ -225,27 +227,89 @@ async function myEmailView(db, userId) {
 }
 
 // ---------- admin panel ----------
-async function adminView(db, userId) {
-  const admins = (envAdmins || "").split(",").map(s => s.trim()).filter(Boolean);
-  if (!admins.includes(String(userId))) {
+const isAdmin = (userId) => (envAdmins || "").split(",").map(s => s.trim()).filter(Boolean).includes(String(userId));
+
+async function adminView(db, userId, section = "stats", arg = null) {
+  if (!isAdmin(userId)) {
     return { text: "⛔️ فقط ادمین دسترسی داره.", kb: [[{ text: "🏠 Panel", callback_data: "home" }]] };
   }
-  const users = await db.prepare("SELECT COUNT(DISTINCT user_id) c FROM addresses").first();
-  const u = await db.prepare("SELECT COUNT(*) c FROM addresses").first();
-  const mailCount = await db.prepare("SELECT COUNT(*) c FROM mails").first();
-  const mailTotal = mailCount ? mailCount.c : 0;
-  const recent = await db.prepare(
-    "SELECT address, sender, subject, received_at FROM mails ORDER BY received_at DESC, id DESC LIMIT 5"
-  ).all();
-  let lines = [`🧑‍💼 <b>Admin Panel</b>\n\n👥 Users: <b>${users.c}</b>\n📮 Addresses: <b>${u.c}</b>\n✉️ Mails: <b>${mailTotal}</b>\n\n<b>آخرین ایمیل‌ها:</b>`];
-  for (const r of (recent.results || [])) {
-    const t = new Date(r.received_at * 1000).toISOString().slice(5, 16).replace("T", " ");
-    lines.push(`• <code>${esc(r.address)}</code> ← ${esc(r.sender || "?")} — ${esc(r.subject || "")} (${t})`);
+
+  const back = [[{ text: "⬅️ Admin Home", callback_data: "admin" }, { text: "🏠 Panel", callback_data: "home" }]];
+
+  // ---- بخش‌های مختلف ----
+  if (section === "user") {
+    // پروفایل کامل یک کاربر
+    const uid = parseInt(arg);
+    const addrs = await db.prepare("SELECT id, address, label, created_at FROM addresses WHERE user_id = ? ORDER BY created_at DESC").bind(uid).all();
+    const mailCount = await db.prepare("SELECT COUNT(*) c FROM mails WHERE address IN (SELECT address FROM addresses WHERE user_id = ?)").bind(uid).first();
+    let t = `👤 <b>کاربر</b> <code>${uid}</code>\n\n📮 آدرس‌ها: <b>${addrs.results.length}</b>\n✉️ ایمیل‌ها: <b>${mailCount.c}</b>\n`;
+    const kb = [];
+    for (const a of (addrs.results || []).slice(0, 15)) {
+      kb.push([{ text: `📥 ${a.label ? a.label + " · " : ""}${a.address}`, callback_data: `adminmail:${a.address}` }]);
+    }
+    kb.push([{ text: "🗑 حذف کاربر و همه آدرس‌ها", callback_data: `deluser:${uid}` }]);
+    kb.push(...back);
+    return { text: t, kb };
   }
+
+  if (section === "mail") {
+    // مشاهده ایمیل‌های یک آدرس (ادمین)
+    const addr = arg;
+    const rows = await db.prepare("SELECT sender, subject, body, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT 5").bind(addr).all();
+    let t = `📥 <b>Admin view:</b> <code>${esc(addr)}</code>\n`;
+    if (!rows.results || !rows.results.length) t += "\n📭 ایمیلی نیست.";
+    else for (const m of rows.results) {
+      const ts = new Date(m.received_at * 1000).toISOString().slice(5, 16).replace("T", " ");
+      t += `\n━━━━━━━━\n✉️ ${esc(m.sender || "?")}\n📌 ${esc(m.subject || "")} (${ts})\n${esc((m.body || "").slice(0, 400))}`;
+    }
+    return { text: t, kb: back };
+  }
+
+  if (section === "users") {
+    // لیست کاربران
+    const rows = await db.prepare(
+      "SELECT user_id, COUNT(*) cnt FROM addresses GROUP BY user_id ORDER BY cnt DESC LIMIT 20"
+    ).all();
+    let t = `👥 <b>کاربران</b> (${rows.results.length})\n\n`;
+    const kb = [];
+    for (const r of (rows.results || [])) {
+      kb.push([{ text: `👤 ${r.user_id} — ${r.cnt} آدرس`, callback_data: `adminuser:${r.user_id}` }]);
+    }
+    kb.push(...back);
+    return { text: t, kb };
+  }
+
+  if (section === "recent") {
+    const rows = await db.prepare(
+      "SELECT address, sender, subject, received_at FROM mails ORDER BY received_at DESC, id DESC LIMIT 10"
+    ).all();
+    let t = `🆕 <b>آخرین ایمیل‌ها</b>\n\n`;
+    for (const r of (rows.results || [])) {
+      const ts = new Date(r.received_at * 1000).toISOString().slice(5, 16).replace("T", " ");
+      t += `• <code>${esc(r.address)}</code>\n  ← ${esc(r.sender || "?")} — ${esc((r.subject || "").slice(0, 40))} (${ts})\n`;
+    }
+    return { text: t, kb: back };
+  }
+
+  // ---- stats (پیش‌فرض) ----
+  const [users, u, mailsToday, mailsTotal] = await Promise.all([
+    db.prepare("SELECT COUNT(DISTINCT user_id) c FROM addresses").first(),
+    db.prepare("SELECT COUNT(*) c FROM addresses").first(),
+    db.prepare("SELECT COUNT(*) c FROM mails WHERE received_at > ?").bind(Math.floor(Date.now() / 1000) - 86400).first(),
+    db.prepare("SELECT COUNT(*) c FROM mails").first(),
+  ]);
+  const domainsLine = DOMAINS.map(d => `  • @${d}`).join("\n");
+
   return {
-    text: lines.join("\n"),
+    text: `╭─────────────────────\n┃ 🧑‍💼 <b>Admin Panel</b>\n╰─────────────────────\n\n` +
+      `👥 <b>کاربران:</b> ${users.c}\n` +
+      `📮 <b>آدرس‌ها:</b> ${u.c}\n` +
+      `✉️ <b>ایمیل ۲۴ ساعت اخیر:</b> ${mailsToday.c}\n` +
+      `📨 <b>کل ایمیل‌ها:</b> ${mailsTotal.c}\n\n` +
+      `🌐 <b>دامنه‌های فعال:</b>\n${domainsLine}`,
     kb: [
-      [{ text: "📊 Stats", callback_data: "admin" }, { text: "🧹 Purge old mails", callback_data: "purge" }],
+      [{ text: "👥 کاربران", callback_data: "adminsec:users" }, { text: "🆕 آخرین ایمیل‌ها", callback_data: "adminsec:recent" }],
+      [{ text: "🧹 پاکسازی >۷ روز", callback_data: "purge" }, { text: "🔥 پاکسازی کل", callback_data: "purgeall" }],
       [{ text: "🏠 Panel", callback_data: "home" }],
     ],
   };
@@ -301,6 +365,15 @@ async function handleUpdate(env, upd) {
   // /rename id newname
   if (text.startsWith("/rename")) {
     return handleRename(env, db, chatId, userId, text);
+  }
+
+  // /panel — پنل ادمین (فقط ادمین)
+  if (text.startsWith("/panel")) {
+    if (!isAdmin(userId)) {
+      return sendMsg(env, chatId, "⛔️ این دستور فقط برای مدیر سیستمه.");
+    }
+    const v = await adminView(db, userId);
+    return sendMsg(env, chatId, v.text, v.kb);
   }
 
   // /inbox [address]
@@ -416,13 +489,49 @@ async function handleCallback(env, db, q) {
       return await edit(v.text, v.kb);
     }
 
+    if (data.startsWith("adminsec:")) {
+      const v = await adminView(db, userId, data.slice(9));
+      return await edit(v.text, v.kb);
+    }
+
+    if (data.startsWith("adminuser:")) {
+      const v = await adminView(db, userId, "user", data.slice(10));
+      return await edit(v.text, v.kb);
+    }
+
+    if (data.startsWith("adminmail:")) {
+      const v = await adminView(db, userId, "mail", data.slice(10));
+      return await edit(v.text, v.kb);
+    }
+
+    if (data.startsWith("deluser:")) {
+      if (!isAdmin(userId)) { await answer(env, q.id, "⛔️"); return "ok"; }
+      const uid = parseInt(data.slice(8));
+      const addrs = await db.prepare("SELECT address FROM addresses WHERE user_id = ?").bind(uid).all();
+      for (const a of (addrs.results || [])) {
+        await db.prepare("DELETE FROM mails WHERE address = ?").bind(a.address).run();
+      }
+      await db.prepare("DELETE FROM addresses WHERE user_id = ?").bind(uid).run();
+      await answer(env, q.id, `🗑 کاربر ${uid} و ${addrs.results.length} آدرسش حذف شد`);
+      const v = await adminView(db, userId, "users");
+      return await edit(v.text, v.kb);
+    }
+
+    if (data === "purgeall") {
+      if (!isAdmin(userId)) { await answer(env, q.id, "⛔️ ادمین نیستی"); return "ok"; }
+      const r = await db.prepare("DELETE FROM mails").run();
+      await answer(env, q.id, `🔥 ${r.meta.changes || 0} ایمیل پاک شد`);
+      const v = await adminView(db, userId);
+      return await edit(v.text, v.kb);
+    }
+
     if (data === "purge") {
-      const admins = (envAdmins || "").split(",").map(s => s.trim());
-      if (!admins.includes(String(userId))) { await answer(env, q.id, "⛔️ ادمین نیستی"); return "ok"; }
+      if (!isAdmin(userId)) { await answer(env, q.id, "⛔️ ادمین نیستی"); return "ok"; }
       const cutoff = Math.floor(Date.now() / 1000) - 7 * 86400;
       const r = await db.prepare("DELETE FROM mails WHERE received_at < ?").bind(cutoff).run();
       await answer(env, q.id, `🧹 ${r.meta.changes || 0} ایمیل قدیمی پاک شد`);
-      return "ok";
+      const v = await adminView(db, userId);
+      return await edit(v.text, v.kb);
     }
   } catch (e) {
     await answer(env, q.id, "خطا: " + e.message).catch(() => {});
