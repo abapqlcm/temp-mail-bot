@@ -133,6 +133,13 @@ async function createAddress(env, db, userId, local, domain) {
 // set at request time from env
 
 // ---------- inbox view ----------
+// استخراج لینک‌های مهم از بدنه ایمیل (لینک تأیید، OTP و...)
+function extractLinks(body) {
+  const urls = (body || "").match(/https?:\/\/[^\s)<>"']+/g) || [];
+  // dedupe + حذف trailing punctuation
+  return [...new Set(urls.map(u => u.replace(/[.,;:)\]]+$/, "")))].slice(0, 5);
+}
+
 async function inboxText(db, address) {
   const rows = await db.prepare(
     "SELECT sender, subject, body, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT 10"
@@ -140,24 +147,55 @@ async function inboxText(db, address) {
   const out = [`📥 <b>Inbox:</b> <code>${esc(address)}</code>\n`];
   if (!rows.results || !rows.results.length) {
     out.push("📭 هنوز ایمیلی به این آدرس نرسیده.\n⏳ منتظر ایمیل بمون یا ازش برای ثبت‌نام استفاده کن!");
-  } else {
-    for (const m of rows.results) {
-      const t = new Date(m.received_at * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC";
-      out.push(`━━━━━━━━━━━━━━\n✉️ <b>From:</b> ${esc(m.sender || "?")}\n` +
-        `📌 <b>Subject:</b> ${esc(m.subject) || "(بدون موضوع)"}\n` +
-        `🕐 ${t}\n<pre>${esc((m.body || "").slice(0, 1200)) || "(خالی)"}</pre>`);
-    }
+    return { text: out.join("\n"), links: [] };
   }
-  return out.join("\n");
+  let newestLinks = [];
+  for (const m of rows.results) {
+    const t = new Date(m.received_at * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+    // نمایش متن بدون لینک‌ها (لینک‌ها دکمه می‌شن)
+    const clean = (m.body || "")
+      .replace(/(https?:\/\/[^\s)<>"']+)/g, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n\s*\n\s*\n+/g, "\n\n")
+      .replace(/\s*\(\s*\)/g, "")
+      .trim();
+    const links = extractLinks(m.body);
+    if (!newestLinks.length) newestLinks = links;
+    const who = (m.sender || "?").replace(/^"?([^"<]+)"?\s*</, "$1").replace(/<[^>]*>/, "").trim();
+    out.push(`━━━━━━━━━━━━━━\n✉️ <b>From:</b> ${esc(who)}\n` +
+      `📌 <b>Subject:</b> ${esc(m.subject) || "(بدون موضوع)"}\n` +
+      `🕐 ${t}\n${esc(clean.slice(0, 900)) || "(خالی)"}`);
+  }
+  return { text: out.join("\n"), links: newestLinks };
 }
 
-function inboxKB(address) {
-  return [[
+function linkLabel(u) {
+  try {
+    const url = new URL(u);
+    const host = url.hostname.replace(/^www\./, "");
+    // فقط path بررسی شه — query params مثل pcpid=confirm گمراه‌کننده‌ان
+    const path = url.pathname.toLowerCase();
+    if (/confirm|verify|activate|validate/.test(path)) return `✅ Confirm — ${host}`;
+    if (/reset|password/.test(path)) return `🔑 Reset Password — ${host}`;
+    if (/login|signin/.test(path)) return `🔓 Login — ${host}`;
+    if (/upgrade|premium|pro|pricing|plans/.test(path)) return `⭐️ Upgrade — ${host}`;
+    return `🔗 Open — ${host}`;
+  } catch { return "🔗 Open Link"; }
+}
+
+function inboxKB(address, links = []) {
+  const kb = [];
+  // دکمه‌های لینک — تپ مستقیم، بدون کپی
+  for (const u of links) {
+    kb.push([{ text: linkLabel(u), url: u }]);
+  }
+  kb.push([
     { text: "🔄 Refresh", callback_data: `inbox:${address}` },
   ], [
     { text: "📬 My Email", callback_data: "myemail" },
     { text: "🏠 Panel", callback_data: "home" },
-  ]];
+  ]);
+  return kb;
 }
 
 // ---------- my email (switcher) ----------
@@ -279,7 +317,8 @@ async function handleUpdate(env, upd) {
     const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?")
       .bind(userId, addr).first();
     if (!own) return sendMsg(env, chatId, "⛔️ این آدرس مال شما نیست.");
-    return sendMsg(env, chatId, await inboxText(db, addr), inboxKB(addr));
+    const v = await inboxText(db, addr);
+    return sendMsg(env, chatId, v.text, inboxKB(addr, v.links));
   }
 
   // /setdomain (admin) — sync check
@@ -345,7 +384,8 @@ async function handleCallback(env, db, q) {
       if (!own) { await answer(env, q.id, "⛔️ این آدرس مال شما نیست."); return "ok"; }
       await db.prepare("UPDATE addresses SET last_used = ? WHERE address = ?")
         .bind(Math.floor(Date.now() / 1000), addr).run();
-      return await edit(await inboxText(db, addr), inboxKB(addr));
+      const v = await inboxText(db, addr);
+      return await edit(v.text, inboxKB(addr, v.links));
     }
 
     if (data.startsWith("del:")) {
