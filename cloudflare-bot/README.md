@@ -1,68 +1,112 @@
 # 📬 Temp Mail Bot — Cloudflare All-in-One
 
-ربات تلگرامی ایمیل موقت روی دامنه اختصاصی خودت — **کاملاً داخل Cloudflare Worker**، بدون Railway، بدون سرور، بدون هزینه.
+ربات تلگرامی ایمیل موقت روی دامنه‌های اختصاصی خودت — **کاملاً داخل Cloudflare Worker**، بدون Railway، بدون سرور، بدون هزینه.
 
-## معماری
-```
-Telegram ◀──webhook──▶  Cloudflare Worker  ◀──Email Routing── ایمیل ورودی به *@دامنه
-                          │
-                        D1 Database (رایگان)
-```
-- ✅ ربات تلگرام + دریافت ایمیل + دیتابیس همه در **یک Worker**
-- ✅ Telegram API از داخل Worker مستقیم صدا زده می‌شه (fetch خارجی رایگان تا ۱۰۰k req/day)
+## ✨ امکانات
 
-## امکانات پنل
+### 🎛 پنل تلگرامی
 | بخش | توضیح |
 |---|---|
-| 🎲 Random | ساخت آدرس تصادفی |
-| ✏️ Custom | `/make name` — آدرس با اسم دلخواه |
-| 📬 My Email | لیست همه آدرس‌های کاربر + سوییچ بین‌شون — **هیچ آدرسی از دست نمی‌ره** |
-| 📥 Inbox | آخرین ۱۰ ایمیل هر آدرس + اعلان لحظه‌ای ایمیل جدید |
-| ✏️ Rename | اسم نمایشی دلخواه برای هر آدرس (`/rename id newname`) |
-| 🗑 Delete | حذف آدرس و ایمیل‌هاش |
-| 🧑‍💼 Admin | آمار کل سیستم + پاکسازی ایمیل‌های قدیمی (فقط ADMIN_IDS) |
+| 🎲 **Random** | انتخاب دامنه → آدرس تصادفی |
+| ✏️ **Custom** | انتخاب دامنه → `/make name@domain` — آدرس با اسم دلخواه |
+| 📬 **My Email** | لیست همه آدرس‌های کاربر + سوییچ آزاد بین‌شون — **هیچ آدرسی از دست نمی‌ره** |
+| ✏️ **Rename** | اسم نمایشی دلخواه برای هر آدرس |
+| 🗑 **Delete** | حذف آدرس و ایمیل‌هاش |
+| 🧑‍💼 **Admin** | آمار کل سیستم (کاربران/آدرس‌ها/ایمیل‌ها) + پاکسازی ایمیل‌های قدیمی |
 
-🔒 **تفکیک کامل:** ایمیل هر آدرس فقط به صاحبش می‌رسه و هر کاربر فقط اینباکس آدرس‌های خودش رو می‌بینه.
+### 📥 اینباکس هوشمند
+- 🔔 **اعلان لحظه‌ای** وقتی ایمیل جدید می‌رسه
+- 🧹 **متن تمیز**: HTML و base64 و quoted-printable به متن ساده تبدیل می‌شه
+- 🔘 **دکمه‌های تپ مستقیم**: لینک‌های تأیید/ریست/لاگین به دکمه تبدیل می‌شن — **بدون کپی کردن، با یه تپ باز می‌شن**
+  - ✅ Confirm / 🔑 Reset / 🔓 Login / ⭐️ Upgrade — لیبل خودکار بر اساس نوع لینک
+  - ایمیلی که فقط کد OTP داره → هیچ دکمه‌ای نمیاد، فقط متن
+- 🔒 **تفکیک کامل**: ایمیل هر آدرس فقط به صاحبش می‌رسه
 
-## دیپلوی (۱۰ دقیقه)
+### 🌐 چند-دامنه‌ای
+- پشتیبانی از چند دامنه روی یک ربات (`DOMAINS` در وورکر)
+- کاربر موقع ساخت، دامنه رو خودش انتخاب می‌کنه
+
+## 🏗 معماری
+```
+Telegram ◀──webhook──▶  Cloudflare Worker  ◀──Email Routing── ایمیل ورودی *@دامنه
+                          │
+                    D1 Database (رایگان)
+```
+- همه‌چیز در **یک Worker**: ربات + دریافت ایمیل + دیتابیس
+- صفر هزینه، بدون sleep، بدون سرور
+
+## 🚀 دیپلوی (۱۰ دقیقه)
+
 ```bash
 cd cloudflare-bot
 npm install -g wrangler
 wrangler login
 
-# 1. ساخت دیتابیس D1
-wrangler d1 create tempmail
-# → database_id رو کپی کن توی wrangler.toml
+# 1. دامنه‌هات رو در worker.js تنظیم کن
+#    const DOMAINS = ["mesterio.life", "example.com"];
 
-# 2. ساخت جداول
+# 2. ساخت دیتابیس D1
+wrangler d1 create tempmail
+# → database_id و account_id رو در wrangler.toml بذار
+
+# 3. ساخت جداول
 wrangler d1 execute tempmail --file schema.sql --remote
 
-# 3. تنظیم متغیرها در wrangler.toml → [vars]
-#    MAIL_DOMAIN = "mail.yourdomain.com"
-#    ADMIN_IDS   = "Telegram user id خودت (با /id از ربات بگیر)"
+# 4. ADMIN_IDS در wrangler.toml (آیدی عددی تلگرام — با /id از ربات بگیر)
 
-# 4. توکن ربات (secret)
+# 5. توکن ربات
 wrangler secret put BOT_TOKEN
 
-# 5. دیپلوی
+# 6. دیپلوی
 wrangler deploy
 
-# 6. ست کردن webhook
-curl "https://temp-mail-bot.<your-subdomain>.workers.dev/setwebhook"
+# 7. ست کردن webhook
+curl "https://<worker-name>.<subdomain>.workers.dev/setwebhook"
 ```
 
-## اتصال دامنه (Cloudflare Email Routing)
-1. داشبورد Cloudflare → دامنه‌ات → **Email → Email Routing** → فعال کن
-2. تب **Email Workers** → **Create** → این Worker رو به عنوان handler انتخاب کن (یا route اضافه کن)
-3. **Routing rules → Catch-all** → Action: Send to Worker → همون worker
-4. حالا هر ایمیلی به `هرچیزی@دامنه` مستقیم به ربات می‌رسه ✅
+### اتصال دامنه‌ها (Cloudflare Email Routing)
+برای هر دامنه:
+1. داشبورد Cloudflare → دامنه → **Email → Email Routing** → فعال کن (MX خودکار ست می‌شه)
+2. **Routing rules → Catch-all** → Action: **Send to Worker** → `temp-mail-bot`
 
-## تست
+حالا هر ایمیلی به `هرچیزی@دامنه` مستقیم به ربات می‌رسه ✅
+
+## 🤖 دستورات ربات
+| دستور | کار |
+|---|---|
+| `/start` | باز کردن پنل |
+| `/new` | ساخت آدرس (با انتخاب دامنه) |
+| `/make name@domain` | آدرس دلخواه با دامنه مشخص |
+| `/inbox` | اینباکس آخرین آدرس |
+| `/rename id newname` | تغییر اسم نمایشی |
+| `/id` | دیدن آیدی عددی تلگرام |
+
+## 🧪 تست
 ```bash
-node test.js   # ۱۴ تست — همه پاس
+node test.js        # ۱۶ تست پنل و جریان‌ها
+node test-parse.js  # ۷ تست پارسر ایمیل (multipart/base64/QP/HTML)
 ```
 
-## نکات
-- ایمیل‌های HTML به متن ساده تبدیل می‌شن (base64/quoted-printable decode می‌شن)
-- ایمیل‌های آدرس‌های ثبت‌نشده ذخیره می‌شن؛ اگر بعداً اون آدرس با Custom ساخته شه، میل‌باکسش از اول پر هست
-- محدودیت رایگان Cloudflare: 100k request/day، 1000 email/day — برای بات شخصی خیلی بیش از کافیه
+## 📁 ساختار
+```
+cloudflare-bot/
+├── worker.js       # کل ربات + پارسر ایمیل (یک فایل!)
+├── wrangler.toml   # کانفیگ دیپلوی
+├── schema.sql      # جداول D1
+├── test.js         # تست‌های پنل
+└── test-parse.js   # تست‌های پارسر
+```
+
+## 🔒 امنیت و حریم خصوصی
+- ایمیل هر آدرس فقط به صاحبش می‌رسه (چک ownership در هر درخواست)
+- توکن ربات به صورت Cloudflare Secret
+- پنل ادمین فقط برای `ADMIN_IDS`
+
+## 💡 نکات
+- محدودیت رایگان Cloudflare: 100k request/day، 1000 email/day — برای استفاده شخصی خیلی کافیه
+- پارس HTML: لینک‌های مهم به دکمه تبدیل و از متن حذف می‌شن؛ متن ایمیل خوانا و تمیز می‌مونه
+- ایمیل‌های آدرس‌های ثبت‌نشده هم ذخیره می‌شن — اگر بعداً اون آدرس با Custom ساخته بشه، میل‌باکسش از اول پرِ ایمیل هست
+- پاکسازی دستی ایمیل‌های قدیمی از پنل ادمین (🧹 Purge — قدیمی‌تر از ۷ روز)
+
+## 📜 License
+MIT
