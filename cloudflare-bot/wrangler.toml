@@ -1,0 +1,13 @@
+name = "temp-mail-bot"
+main = "worker.js"
+compatibility_date = "2024-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tempmail"
+database_id = "CREATE_WITH_COMMAND_BELOW"
+
+[vars]
+# MAIL_DOMAIN = "mail.yourdomain.com"
+# ADMIN_IDS = "123456789"
+# BOT_TOKEN بهتره با secret ست شه: wrangler secret put BOT_TOKEN
