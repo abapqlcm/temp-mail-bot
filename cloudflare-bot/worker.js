@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS addresses (
   address TEXT NOT NULL UNIQUE,
   label TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
-  last_used INTEGER DEFAULT 0
+  last_used INTEGER DEFAULT 0,
+  expires_at INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS mails (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,11 +93,20 @@ CREATE INDEX IF NOT EXISTS idx_addr_user ON addresses(user_id);
 CREATE INDEX IF NOT EXISTS idx_mails_addr ON mails(address, received_at DESC);
 `;
 
+// مهاجرت: ستون expires_at اگر نبود اضافه شه (برای دیتابیس‌های قبلی)
 async function initDB(db) {
   for (const stmt of INIT_SQL.split(";")) {
     const s = stmt.trim();
     if (s) await db.prepare(s).run();
   }
+  try {
+    await db.prepare("ALTER TABLE addresses ADD COLUMN expires_at INTEGER DEFAULT 0").run();
+  } catch { /* ستون هست */ }
+  // پاکسازی آدرس‌های منقضی (هر بار ربات بیدار شه — سبک و بدون cron)
+  try {
+    await db.prepare("DELETE FROM mails WHERE address IN (SELECT address FROM addresses WHERE expires_at > 0 AND expires_at < ?)").bind(Math.floor(Date.now() / 1000)).run();
+    await db.prepare("DELETE FROM addresses WHERE expires_at > 0 AND expires_at < ?").bind(Math.floor(Date.now() / 1000)).run();
+  } catch { /* ignore */ }
 }
 
 // ---------- address creation ----------
@@ -142,17 +152,35 @@ function extractLinks(body) {
   return [...new Set(urls.map(u => u.replace(/[.,;:)\]]+$/, "")))].slice(0, 5);
 }
 
-async function inboxText(db, address) {
-  const rows = await db.prepare(
-    "SELECT sender, subject, body, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT 10"
-  ).bind(address).all();
-  const out = [`📥 <b>Inbox:</b> <code>${esc(address)}</code>\n`];
-  if (!rows.results || !rows.results.length) {
-    out.push("📭 هنوز ایمیلی به این آدرس نرسیده.\n⏳ منتظر ایمیل بمون یا ازش برای ثبت‌نام استفاده کن!");
-    return { text: out.join("\n"), links: [] };
+// استخراج کد OTP از متن ایمیل (۴ تا ۸ رقم، با کلمات کلیدی)
+function extractOtp(body) {
+  if (!body) return null;
+  const patterns = [
+    /(?:code|otp|pin|password|verification|confirm|token|کد)\s*(?:is|:|=)?\s*\D{0,10}\b(\d{4,8})\b/i,
+    /\b(\d{6})\b/, // ۶ رقم — رایج‌ترین
+    /\b(\d{4,8})\b/,
+  ];
+  for (const re of patterns) {
+    const m = body.match(re);
+    if (m) return m[1];
   }
-  let newestLinks = [];
-  for (const m of rows.results) {
+  return null;
+}
+
+async function inboxText(db, address, offset = 0) {
+  const PAGE = 10;
+  const rows = await db.prepare(
+    "SELECT sender, subject, body, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT ? OFFSET ?"
+  ).bind(address, PAGE + 1, offset).all();
+  const hasMore = (rows.results || []).length > PAGE;
+  const list = (rows.results || []).slice(0, PAGE);
+  const out = [`📥 <b>Inbox:</b> <code>${esc(address)}</code>\n`];
+  if (!list.length) {
+    out.push(offset > 0 ? "📭 به همینجا رسیدیم — ایمیل قدیمی‌تری نیست." : "📭 هنوز ایمیلی به این آدرس نرسیده.\n⏳ منتظر ایمیل بمون یا ازش برای ثبت‌نام استفاده کن!");
+    return { text: out.join("\n"), links: [], otps: [], hasMore: false };
+  }
+  let newestLinks = [], newestOtps = [];
+  for (const m of list) {
     const t = new Date(m.received_at * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC";
     // نمایش متن بدون لینک‌ها (لینک‌ها دکمه می‌شن)
     const clean = (m.body || "")
@@ -162,13 +190,17 @@ async function inboxText(db, address) {
       .replace(/\s*\(\s*\)/g, "")
       .trim();
     const links = extractLinks(m.body);
+    const otp = extractOtp(m.body);
     if (!newestLinks.length) newestLinks = links;
+    if (!newestOtps.length && otp) newestOtps = [{ code: otp, subject: m.subject || "" }];
     const who = (m.sender || "?").replace(/^"?([^"<]+)"?\s*</, "$1").replace(/<[^>]*>/, "").trim();
+    // کد OTP بزرگ و برجسته داخل کارت
+    const otpLine = otp ? `\n🔐 <b>کد:</b> <code><b>${otp}</b></code>\n` : "";
     out.push(`━━━━━━━━━━━━━━\n✉️ <b>From:</b> ${esc(who)}\n` +
       `📌 <b>Subject:</b> ${esc(m.subject) || "(بدون موضوع)"}\n` +
-      `🕐 ${t}\n${esc(clean.slice(0, 900)) || "(خالی)"}`);
+      `🕐 ${t}${otpLine}\n${esc(clean.slice(0, 900)) || "(خالی)"}`);
   }
-  return { text: out.join("\n"), links: newestLinks };
+  return { text: out.join("\n"), links: newestLinks, otps: newestOtps, hasMore, offset };
 }
 
 function linkLabel(u) {
@@ -185,15 +217,20 @@ function linkLabel(u) {
   } catch { return "🔗 Open Link"; }
 }
 
-function inboxKB(address, links = []) {
+function inboxKB(address, links = [], otps = [], hasMore = false, offset = 0) {
   const kb = [];
+  // 🔐 دکمه کپی OTP — بالای همه دکمه‌ها
+  for (const o of (otps || [])) {
+    kb.push([{ text: `🔐 کپی کد: ${o.code}`, callback_data: `copyotp:${o.code}` }]);
+  }
   // دکمه‌های لینک — تپ مستقیم، بدون کپی
   for (const u of links) {
     kb.push([{ text: linkLabel(u), url: u }]);
   }
+  const nav = [{ text: "🔄 Refresh", callback_data: `inbox:${address}` }];
+  if (hasMore) nav.push({ text: `⬅️ قدیمی‌ترها (صفحه ${Math.floor(offset / 10) + 2})`, callback_data: `inboxpage:${address}:${offset + 10}` });
+  kb.push(nav);
   kb.push([
-    { text: "🔄 Refresh", callback_data: `inbox:${address}` },
-  ], [
     { text: "📬 My Email", callback_data: "myemail" },
     { text: "🏠 Panel", callback_data: "home" },
   ]);
@@ -367,6 +404,42 @@ async function handleUpdate(env, upd) {
     return handleRename(env, db, chatId, userId, text);
   }
 
+  // /search keyword — جستجو در همه ایمیل‌های کاربر (آیتم ۶)
+  if (text.startsWith("/search")) {
+    const kw = text.slice(8).trim().toLowerCase();
+    if (!kw) return sendMsg(env, chatId, "🔎 چی بگردم؟ مثلاً: <code>/search otp</code> یا <code>/search windscribe</code>");
+    const rows = await db.prepare(
+      `SELECT m.address, m.sender, m.subject, m.body, m.received_at FROM mails m
+       JOIN addresses a ON a.address = m.address
+       WHERE a.user_id = ? AND (LOWER(m.subject) LIKE ? OR LOWER(m.body) LIKE ? OR LOWER(m.sender) LIKE ? OR LOWER(m.address) LIKE ?)
+       ORDER BY m.received_at DESC LIMIT 10`
+    ).bind(userId, `%${kw}%`, `%${kw}%`, `%${kw}%`, `%${kw}%`).all();
+    if (!rows.results || !rows.results.length) return sendMsg(env, chatId, `🔎 چیزی برای «${esc(kw)}» پیدا نشد.`);
+    let t = `🔎 <b>نتایج جستجو:</b> «${esc(kw)}» (${rows.results.length})\n\n`;
+    for (const m of rows.results) {
+      const ts = new Date(m.received_at * 1000).toISOString().slice(5, 16).replace("T", " ");
+      const otp = extractOtp(m.body);
+      t += `━━━━━━━━\n📥 <code>${esc(m.address)}</code>\n✉️ ${esc((m.sender || "?").slice(0, 40))}\n📌 ${esc((m.subject || "").slice(0, 60))} (${ts})\n` +
+        (otp ? `🔐 <code><b>${otp}</b></code>\n` : "") +
+        `${esc((m.body || "").replace(/https?:\/\/\S+/g, "").slice(0, 200))}\n\n`;
+    }
+    return sendMsg(env, chatId, t.slice(0, 4000));
+  }
+
+  // /expire id hours — انقضای خودکار آدرس (آیتم ۸) — 0 = لغو
+  if (text.startsWith("/expire")) {
+    const m = text.match(/^\/expire\s+(\d+)\s+(\d{1,5})$/);
+    if (!m) return sendMsg(env, chatId, "فرمت: <code>/expire آیدی_آدرس ساعت</code>\nمثلاً <code>/expire 3 1</code> = حذف خودکار بعد از ۱ ساعت\n<code>/expire 3 0</code> = لغو انقضا\nآیدی رو از My Email بگیر.");
+    const [id, hours] = [parseInt(m[1]), parseInt(m[2])];
+    const expires = hours === 0 ? 0 : Math.floor(Date.now() / 1000) + hours * 3600;
+    const r = await db.prepare("UPDATE addresses SET expires_at = ? WHERE id = ? AND user_id = ?")
+      .bind(expires, id, userId).run();
+    if (!r.meta.changes) return sendMsg(env, chatId, "⛔️ آدرس پیدا نشد.");
+    return sendMsg(env, chatId, hours === 0
+      ? "♾ انقضا لغو شد — آدرس دائمیه."
+      : `⏰ آدرس بعد از <b>${hours} ساعت</b> خودکار حذف می‌شه.\nبرای لغو: <code>/expire ${id} 0</code>`);
+  }
+
   // /panel — پنل ادمین (فقط ادمین)
   if (text.startsWith("/panel")) {
     if (!isAdmin(userId)) {
@@ -457,8 +530,29 @@ async function handleCallback(env, db, q) {
       if (!own) { await answer(env, q.id, "⛔️ این آدرس مال شما نیست."); return "ok"; }
       await db.prepare("UPDATE addresses SET last_used = ? WHERE address = ?")
         .bind(Math.floor(Date.now() / 1000), addr).run();
-      const v = await inboxText(db, addr);
-      return await edit(v.text, inboxKB(addr, v.links));
+      const v = await inboxText(db, addr, 0);
+      return await edit(v.text, inboxKB(addr, v.links, v.otps, v.hasMore, 0));
+    }
+
+    if (data.startsWith("inboxpage:")) {
+      // inboxpage:address:offset
+      const rest = data.slice(10);
+      const idx = rest.lastIndexOf(":");
+      const addr = rest.slice(0, idx);
+      const offset = parseInt(rest.slice(idx + 1)) || 0;
+      const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?")
+        .bind(userId, addr).first();
+      if (!own) { await answer(env, q.id, "⛔️ این آدرس مال شما نیست."); return "ok"; }
+      const v = await inboxText(db, addr, offset);
+      return await edit(v.text, inboxKB(addr, v.links, v.otps, v.hasMore, offset));
+    }
+
+    if (data.startsWith("copyotp:")) {
+      const code = data.slice(8);
+      // تلگرام اجازه clipboard مستقیم نمی‌ده؛ کد رو به شکل قابل کپی تکی می‌فرستیم
+      await answer(env, q.id, `🔐 کد: ${code} — نگه دار، انتخاب و کپی کن`);
+      await sendMsg(env, q.message.chat.id, `<code><b>${code}</b></code>`);
+      return "ok";
     }
 
     if (data.startsWith("del:")) {
@@ -684,14 +778,21 @@ async function handleEmail(env, message) {
     "INSERT INTO mails (address, sender, subject, body, received_at) VALUES (?, ?, ?, ?, ?)"
   ).bind(to, from, subject, body, Math.floor(Date.now() / 1000)).run();
 
-  // اعلان فقط به صاحب آدرس (تفکیک کامل)
+  // اعلان فقط به صاحب آدرس (تفکیک کامل) — کد OTP مستقیم توی اعلان (آیتم ۷)
   const owner = await db.prepare("SELECT user_id FROM addresses WHERE address = ?").bind(to).first();
   if (owner) {
+    const otp = extractOtp(body);
+    const who = (from || "?").replace(/^"?([^"<]+)"?\s*</, "$1").replace(/<[^>]*>/, "").trim();
+    const text = `📩 <b>ایمیل جدید!</b>\n📥 To: <code>${esc(to)}</code>\n✉️ From: ${esc(who)}\n📌 Subject: ${esc(subject) || "(بدون موضوع)"}` +
+      (otp ? `\n\n🔐 <b>کد شما:</b> <code><b>${otp}</b></code>` : "");
+    const kb = [];
+    if (otp) kb.push([{ text: `🔐 کپی کد: ${otp}`, callback_data: `copyotp:${otp}` }]);
+    kb.push([{ text: "📥 خواندن", callback_data: `inbox:${to}` }]);
     await tg(env, "sendMessage", {
       chat_id: owner.user_id,
       parse_mode: "HTML",
-      text: `📩 <b>ایمیل جدید!</b>\n📥 To: <code>${esc(to)}</code>\n✉️ From: ${esc(from)}\n📌 Subject: ${esc(subject) || "(بدون موضوع)"}`,
-      reply_markup: { inline_keyboard: [[{ text: "📥 خواندن", callback_data: `inbox:${to}` }]] },
+      text,
+      reply_markup: { inline_keyboard: kb },
     });
   }
 }
