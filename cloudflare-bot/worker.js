@@ -26,7 +26,9 @@ async function tg(env, method, payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  try { return await r.json(); } catch { return null; }
+  const text = await r.text();
+  console.log("TG:", method, "status", r.status, text.slice(0, 140));
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 const sendMsg = (env, chat_id, text, kb) => tg(env, "sendMessage", {
@@ -93,31 +95,38 @@ CREATE INDEX IF NOT EXISTS idx_addr_user ON addresses(user_id);
 CREATE INDEX IF NOT EXISTS idx_mails_addr ON mails(address, received_at DESC);
 `;
 
-// مهاجرت + پاکسازی — یک‌بار به ازای هر isolate، همه در یک batch (یک round-trip — cold start سریع)
+// مهاجرت + پاکسازی — یک‌بار به ازای هر isolate، batch با prepared statements
+// (D1 فقط prepared statement یا رشته قبول می‌کنه؛ آبجکت {sql} = Malformed input!)
 let dbReady = null;
 let lastCleanup = 0;
-const INIT_STMTS = INIT_SQL.split(";").map(s => s.trim()).filter(Boolean).map(sql => ({ sql }));
+const INIT_SQLS = INIT_SQL.split(";").map(s => s.trim()).filter(Boolean);
 async function initDB(db) {
   if (!dbReady) {
     dbReady = (async () => {
+      const stmts = () => INIT_SQLS.map(s => db.prepare(s));
       try {
-        await db.batch(INIT_STMTS);
+        await db.batch(stmts());
       } catch {
-        // DB قدیمی بدون expires_at — یک‌بار migrat کنید و دوبه
+        // DB قدیمی بدون expires_at — یک‌بار migrate و دوبه
         try { await db.prepare("ALTER TABLE addresses ADD COLUMN expires_at INTEGER DEFAULT 0").run(); } catch { /* هست */ }
-        await db.batch(INIT_STMTS);
+        try { await db.batch(stmts()); }
+        catch (e2) {
+          // fallback امن: یکی‌یکی (کندتره ولی هرگز نمی‌شکنه)
+          console.log("batch-init fallback:", e2 && e2.message);
+          for (const s of INIT_SQLS) await db.prepare(s).run();
+        }
       }
     })().catch(e => { dbReady = null; throw e; });
   }
   await dbReady;
-  // پاکسازی آدرس‌های منقضی: حداکثر هر ۱۰ دقیقه یک‌بار، در یک batch
+  // پاکسازی آدرس‌های منقضی: حداکثر هر ۱۰ دقیقه یک‌بار
   const now = Math.floor(Date.now() / 1000);
   if (now - lastCleanup > 600) {
     lastCleanup = now;
     try {
       await db.batch([
-        { sql: "DELETE FROM mails WHERE address IN (SELECT address FROM addresses WHERE expires_at > 0 AND expires_at < ?)", params: [now] },
-        { sql: "DELETE FROM addresses WHERE expires_at > 0 AND expires_at < ?", params: [now] },
+        db.prepare("DELETE FROM mails WHERE address IN (SELECT address FROM addresses WHERE expires_at > 0 AND expires_at < ?)").bind(now),
+        db.prepare("DELETE FROM addresses WHERE expires_at > 0 AND expires_at < ?").bind(now),
       ]);
     } catch { /* ignore */ }
   }
@@ -891,8 +900,9 @@ export default {
       if (request.method !== "POST") return new Response("method", { status: 405 });
       const upd = await request.json();
       // پاسخ فوری به تلگرام؛ پردازش در بک‌گراند (وگرنه spinner طولانی)
-      if (ctx && ctx.waitUntil) ctx.waitUntil(handleUpdate(env, upd).catch(() => {}));
-      else await handleUpdate(env, upd);
+      const job = handleUpdate(env, upd).catch(e => console.log("UPDATE-BOOM:", e && e.message, (e && e.stack || "").slice(0, 300)));
+      if (ctx && ctx.waitUntil) ctx.waitUntil(job);
+      else await job;
       return json({ ok: true });
     }
     // setWebhook helper: GET /setwebhook?u=https://xxx.workers.dev
