@@ -785,32 +785,53 @@ async function handleEmail(env, message) {
   const db = env.DB;
   await initDB(db);
 
-  const raw = await new Response(message.raw).text();
-  const to = (message.to || "").toLowerCase();
-  const { from, subject, body } = parseEmail(raw);
+  let to = (message.to || "").toLowerCase();
+  let from = "", subject = "", body = "";
+  try {
+    const raw = await new Response(message.raw).text();
+    ({ from, subject, body } = parseEmail(raw));
+    subject = (subject || "").slice(0, 300);
+  } catch (e) {
+    // پارسر کرش کرد — متن خام رو حداقل ذخیره کن تا ایمیل گم نشه
+    console.log("parse fail:", e && e.message);
+    try {
+      const raw = await new Response(message.raw).text();
+      const mTo = raw.match(/^To:\s*(.+)$/im); if (mTo && !to) to = mTo[1].toLowerCase();
+      const mFr = raw.match(/^From:\s*(.+)$/im); if (mFr) from = mFr[1];
+      const mSj = raw.match(/^Subject:\s*(.+)$/im); if (mSj) subject = mSj[1];
+      body = raw.slice(0, 3000);
+    } catch { body = "(خطای پارس ایمیل)"; }
+  }
 
-  // آدرس‌های ناشناس هم ذخیره می‌شن تا اگر بعداً با /make ساخته شد، ایمیل‌های قبلی دیدنی باشن
-  await db.prepare(
-    "INSERT INTO mails (address, sender, subject, body, received_at) VALUES (?, ?, ?, ?, ?)"
-  ).bind(to, from, subject, body, Math.floor(Date.now() / 1000)).run();
+  try {
+    // آدرس‌های ناشناس هم ذخیره می‌شن تا اگر بعداً با /make ساخته شد، ایمیل‌های قبلی دیدنی باشن
+    await db.prepare(
+      "INSERT INTO mails (address, sender, subject, body, received_at) VALUES (?, ?, ?, ?, ?)"
+    ).bind(to, from, subject, body, Math.floor(Date.now() / 1000)).run();
+  } catch (e) {
+    console.log("DB insert fail:", e && e.message);
+    return; // اعلان بی‌معنه اگر ذخیره نشد
+  }
 
   // اعلان فقط به صاحب آدرس (تفکیک کامل) — کد OTP مستقیم توی اعلان (آیتم ۷)
-  const owner = await db.prepare("SELECT user_id FROM addresses WHERE address = ?").bind(to).first();
-  if (owner) {
-    const otp = extractOtp(body);
-    const who = (from || "?").replace(/^"?([^"<]+)"?\s*</, "$1").replace(/<[^>]*>/, "").trim();
-    const text = `📩 <b>ایمیل جدید!</b>\n📥 To: <code>${esc(to)}</code>\n✉️ From: ${esc(who)}\n📌 Subject: ${esc(subject) || "(بدون موضوع)"}` +
-      (otp ? `\n\n🔐 <b>کد شما:</b> <code><b>${otp}</b></code>` : "");
-    const kb = [];
-    if (otp) kb.push([{ text: `🔐 کپی کد: ${otp}`, callback_data: `copyotp:${otp}` }]);
-    kb.push([{ text: "📥 خواندن", callback_data: `inbox:${to}` }]);
-    await tg(env, "sendMessage", {
-      chat_id: owner.user_id,
-      parse_mode: "HTML",
-      text,
-      reply_markup: { inline_keyboard: kb },
-    });
-  }
+  try {
+    const owner = await db.prepare("SELECT user_id FROM addresses WHERE address = ?").bind(to).first();
+    if (owner) {
+      const otp = extractOtp(body);
+      const who = (from || "?").replace(/^"?([^"<]+)"?\s*</, "$1").replace(/<[^>]*>/, "").trim();
+      const text = `📩 <b>ایمیل جدید!</b>\n📥 To: <code>${esc(to)}</code>\n✉️ From: ${esc(who.slice(0, 80))}\n📌 Subject: ${(esc(subject.slice(0, 200)) || "(بدون موضوع)")}` +
+        (otp ? `\n\n🔐 <b>کد شما:</b> <code><b>${otp}</b></code>` : "");
+      const kb = [];
+      if (otp) kb.push([{ text: `🔐 کپی کد: ${otp}`, callback_data: `copyotp:${otp}` }]);
+      kb.push([{ text: "📥 خواندن", callback_data: `inbox:${to}` }]);
+      await tg(env, "sendMessage", {
+        chat_id: owner.user_id,
+        parse_mode: "HTML",
+        text,
+        reply_markup: { inline_keyboard: kb },
+      });
+    }
+  } catch (e) { console.log("notify fail:", e && e.message); }
 }
 
 // ---------- worker entry ----------
@@ -820,6 +841,19 @@ export default {
       envAdmins = env.ADMIN_IDS || "";
 
     if (url.pathname === "/health") return new Response("ok");
+
+    // عیب‌یابی: نمای خودِ ورکر از D1 (جدول‌ها + شمارش)
+    if (url.pathname === "/dbtest") {
+      try {
+        await initDB(env.DB);
+        const t = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+        const m = await env.DB.prepare("SELECT COUNT(*) c FROM mails").first();
+        const a = await env.DB.prepare("SELECT COUNT(*) c FROM addresses").first();
+        return json({ tables: (t.results || []).map(x => x.name), mails: m.c, addresses: a.c });
+      } catch (e) {
+        return json({ error: String(e && e.message || e) }, 500);
+      }
+    }
 
     // secret check for webhook
     if (url.pathname === "/webhook") {
