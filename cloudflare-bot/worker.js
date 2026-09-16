@@ -93,20 +93,31 @@ CREATE INDEX IF NOT EXISTS idx_addr_user ON addresses(user_id);
 CREATE INDEX IF NOT EXISTS idx_mails_addr ON mails(address, received_at DESC);
 `;
 
-// مهاجرت: ستون expires_at اگر نبود اضافه شه (برای دیتابیس‌های قبلی)
+// مهاجرت + پاکسازی — فقط یک‌بار به ازای هر isolate (نه هر آپدیت — وگرنه کند می‌شه)
+let dbReady = null;
+let lastCleanup = 0;
 async function initDB(db) {
-  for (const stmt of INIT_SQL.split(";")) {
-    const s = stmt.trim();
-    if (s) await db.prepare(s).run();
+  if (!dbReady) {
+    dbReady = (async () => {
+      for (const stmt of INIT_SQL.split(";")) {
+        const s = stmt.trim();
+        if (s) await db.prepare(s).run();
+      }
+      try {
+        await db.prepare("ALTER TABLE addresses ADD COLUMN expires_at INTEGER DEFAULT 0").run();
+      } catch { /* ستون هست */ }
+    })().catch(e => { dbReady = null; throw e; });
   }
-  try {
-    await db.prepare("ALTER TABLE addresses ADD COLUMN expires_at INTEGER DEFAULT 0").run();
-  } catch { /* ستون هست */ }
-  // پاکسازی آدرس‌های منقضی (هر بار ربات بیدار شه — سبک و بدون cron)
-  try {
-    await db.prepare("DELETE FROM mails WHERE address IN (SELECT address FROM addresses WHERE expires_at > 0 AND expires_at < ?)").bind(Math.floor(Date.now() / 1000)).run();
-    await db.prepare("DELETE FROM addresses WHERE expires_at > 0 AND expires_at < ?").bind(Math.floor(Date.now() / 1000)).run();
-  } catch { /* ignore */ }
+  await dbReady;
+  // پاکسازی آدرس‌های منقضی: حداکثر هر ۱۰ دقیقه یک‌بار
+  const now = Math.floor(Date.now() / 1000);
+  if (now - lastCleanup > 600) {
+    lastCleanup = now;
+    try {
+      await db.prepare("DELETE FROM mails WHERE address IN (SELECT address FROM addresses WHERE expires_at > 0 AND expires_at < ?)").bind(now).run();
+      await db.prepare("DELETE FROM addresses WHERE expires_at > 0 AND expires_at < ?").bind(now).run();
+    } catch { /* ignore */ }
+  }
 }
 
 // ---------- address creation ----------
@@ -482,10 +493,15 @@ async function handleCallback(env, db, q) {
   const msgId = msg.message_id;
   const data = q.data || "";
   const edit = async (text, kb) => {
-    await tg(env, "editMessageText", {
+    const res = await tg(env, "editMessageText", {
       chat_id: chatId, message_id: msgId, text, parse_mode: "HTML",
       ...(kb ? { reply_markup: { inline_keyboard: kb } } : {}),
     });
+    // تلگرام وقتی محتوا تغییری نکرده error_code 400 (not modified) می‌ده — رفرش بدون تغییر
+    if (res && res.ok === false && /not modified/i.test(res.description || "")) {
+      await answer(env, q.id, "✅ چیزی جدید نیست");
+    }
+    return res;
   };
 
   try {
@@ -799,7 +815,7 @@ async function handleEmail(env, message) {
 
 // ---------- worker entry ----------
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
       envAdmins = env.ADMIN_IDS || "";
 
@@ -809,7 +825,9 @@ export default {
     if (url.pathname === "/webhook") {
       if (request.method !== "POST") return new Response("method", { status: 405 });
       const upd = await request.json();
-      await handleUpdate(env, upd);
+      // پاسخ فوری به تلگرام؛ پردازش در بک‌گراند (وگرنه spinner طولانی)
+      if (ctx && ctx.waitUntil) ctx.waitUntil(handleUpdate(env, upd).catch(() => {}));
+      else await handleUpdate(env, upd);
       return json({ ok: true });
     }
     // setWebhook helper: GET /setwebhook?u=https://xxx.workers.dev
