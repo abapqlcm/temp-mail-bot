@@ -34,7 +34,11 @@ function mockDB() {
     if (sql.includes("FROM mails ORDER BY")) return { results: mails.slice(0, 5) };
     throw new Error("unknown all sql: " + sql);
   };
-  return { prepare: (sql) => ({ bind: (...b) => ({ run: () => run(sql, ...b), first: () => first(sql, ...b), all: () => all(sql, ...b) }), run: () => run(sql), first: () => first(sql), all: () => all(sql) }) };
+  return {
+    prepare: (sql) => ({ bind: (...b) => ({ run: () => run(sql, ...b), first: () => first(sql, ...b), all: () => all(sql, ...b) }), run: () => run(sql), first: () => first(sql), all: () => all(sql) }),
+    batch: async (stmts) => { for (const s of stmts) await run(s.sql, ...(s.params || [])); return [];
+    },
+  };
 }
 
 const sent = [];

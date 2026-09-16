@@ -93,29 +93,32 @@ CREATE INDEX IF NOT EXISTS idx_addr_user ON addresses(user_id);
 CREATE INDEX IF NOT EXISTS idx_mails_addr ON mails(address, received_at DESC);
 `;
 
-// مهاجرت + پاکسازی — فقط یک‌بار به ازای هر isolate (نه هر آپدیت — وگرنه کند می‌شه)
+// مهاجرت + پاکسازی — یک‌بار به ازای هر isolate، همه در یک batch (یک round-trip — cold start سریع)
 let dbReady = null;
 let lastCleanup = 0;
+const INIT_STMTS = INIT_SQL.split(";").map(s => s.trim()).filter(Boolean).map(sql => ({ sql }));
 async function initDB(db) {
   if (!dbReady) {
     dbReady = (async () => {
-      for (const stmt of INIT_SQL.split(";")) {
-        const s = stmt.trim();
-        if (s) await db.prepare(s).run();
-      }
       try {
-        await db.prepare("ALTER TABLE addresses ADD COLUMN expires_at INTEGER DEFAULT 0").run();
-      } catch { /* ستون هست */ }
+        await db.batch(INIT_STMTS);
+      } catch {
+        // DB قدیمی بدون expires_at — یک‌بار migrat کنید و دوبه
+        try { await db.prepare("ALTER TABLE addresses ADD COLUMN expires_at INTEGER DEFAULT 0").run(); } catch { /* هست */ }
+        await db.batch(INIT_STMTS);
+      }
     })().catch(e => { dbReady = null; throw e; });
   }
   await dbReady;
-  // پاکسازی آدرس‌های منقضی: حداکثر هر ۱۰ دقیقه یک‌بار
+  // پاکسازی آدرس‌های منقضی: حداکثر هر ۱۰ دقیقه یک‌بار، در یک batch
   const now = Math.floor(Date.now() / 1000);
   if (now - lastCleanup > 600) {
     lastCleanup = now;
     try {
-      await db.prepare("DELETE FROM mails WHERE address IN (SELECT address FROM addresses WHERE expires_at > 0 AND expires_at < ?)").bind(now).run();
-      await db.prepare("DELETE FROM addresses WHERE expires_at > 0 AND expires_at < ?").bind(now).run();
+      await db.batch([
+        { sql: "DELETE FROM mails WHERE address IN (SELECT address FROM addresses WHERE expires_at > 0 AND expires_at < ?)", params: [now] },
+        { sql: "DELETE FROM addresses WHERE expires_at > 0 AND expires_at < ?", params: [now] },
+      ]);
     } catch { /* ignore */ }
   }
 }
