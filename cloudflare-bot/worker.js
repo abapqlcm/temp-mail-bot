@@ -788,7 +788,8 @@ async function handleEmail(env, message) {
   let to = (message.to || "").toLowerCase();
   let from = "", subject = "", body = "";
   try {
-    const raw = await new Response(message.raw).text();
+    // سقف حجم: بدنه‌های سنگین (تصویر base64) باعث timeout/CPU نمی‌شن
+    const raw = (await new Response(message.raw).text()).slice(0, 300000);
     ({ from, subject, body } = parseEmail(raw));
     subject = (subject || "").slice(0, 300);
   } catch (e) {
