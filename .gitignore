@@ -1,3 +1,7 @@
 .env.local
 node_modules/
 .wrangler/
+
+.venv/
+__pycache__/
+*.pyc
