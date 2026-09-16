@@ -297,6 +297,9 @@ async function myEmailView(db, userId) {
 }
 
 // ---------- admin panel ----------
+// envAdmins در هر نقطه‌ی ورود (webhook / email / fetch) ست می‌شه تا isAdmin جواب بده.
+// نکته: اگه اینجا باشه و در handleEmail ست نشه، اعلان ادمین خاموش می‌موند.
+let envAdmins = "";
 const isAdmin = (userId) => (envAdmins || "").split(",").map(s => s.trim()).filter(Boolean).includes(String(userId));
 
 async function adminView(db, userId, section = "stats", arg = null) {
@@ -384,9 +387,6 @@ async function adminView(db, userId, section = "stats", arg = null) {
     ],
   };
 }
-
-// read env refs into locals (set in handleUpdate/inbound)
-let envAdmins = "";
 
 // /rename <id> <newname> — تغییر label آدرس (آدرس واقعی عوض نمی‌شه، فقط اسم نمایشی)
 async function handleRename(env, db, chatId, userId, text) {
@@ -691,7 +691,6 @@ async function handleCallback(env, db, q) {
 
 // ---------- email receiving (Cloudflare Email Routing) ----------
 function decodeQuotedPrintable(s) {
-  // بایت‌محور. =XX فقط وقتی decode شه که context نشونه انکودینگ واقعی باشه:
   // UTF-8 lead bytes (>=C2) همیشه decode؛ else اگر بعدش URL-safe نیاد decode، وگرنه literal (=).
   const bytes = [];
   let i = 0;
@@ -822,6 +821,9 @@ function decodeMimeWords(s) {
 
 async function handleEmail(env, message) {
   const db = env.DB;
+  // envAdmins اینجا هم ست می‌شه — اگه نه، isAdmin تو مسیر ایمیل undefined برمی‌گردونه
+  // ( قبلاً فقط تو handleUpdate ست می‌شد → پنل ادمین تو نوتیف‌های ایمیل خاموش بود )
+  envAdmins = env.ADMIN_IDS || "";
   await initDB(db);
 
   let to = (message.to || "").toLowerCase();
