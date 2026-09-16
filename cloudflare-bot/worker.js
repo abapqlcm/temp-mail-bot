@@ -8,7 +8,7 @@
  * Commands: /start panel; inline buttons for everything.
  */
 
-const DOMAINS = ["mesterio.life", "iprez.dpdns.org"];
+const DOMAINS = ["mesterio.life"];
 
 // ---------- helpers ----------
 const esc = (t) => (t || "").toString()
