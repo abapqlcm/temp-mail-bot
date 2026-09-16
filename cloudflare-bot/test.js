@@ -5,7 +5,7 @@ function mockDB() {
   const run = async (sql, ...binds) => {
     sql = sql.trim();
     if (sql.startsWith("INSERT INTO addresses")) { if (addresses.some(a => a.address === binds[1])) throw new Error("UNIQUE constraint failed: addresses.address"); addresses.push({ id: addresses.length + 1, address: binds[1], user_id: binds[0], label: "", last_used: 0 }); return { meta: { changes: 1 } }; }
-    if (sql.startsWith("INSERT INTO mails")) { mails.push({ address: binds[0], sender: binds[1], subject: binds[2], body: binds[3], received_at: binds[4] }); return { meta: { changes: 1 } }; }
+    if (sql.startsWith("INSERT INTO mails")) { mails.push({ id: mails.length + 1, address: binds[0], sender: binds[1], subject: binds[2], body: binds[3], received_at: binds[4] }); return { meta: { changes: 1 } }; }
     if (sql.startsWith("UPDATE addresses SET last_used")) return { meta: { changes: 1 } };
     if (sql.startsWith("UPDATE addresses SET label")) { const a = addresses.find(x => x.id === binds[1]); if (a) a.label = binds[0]; return { meta: { changes: a ? 1 : 0 } }; }
     if (sql.startsWith("DELETE FROM addresses")) { const i = addresses.findIndex(x => x.id === binds[0]); if (i >= 0) { mails.length = mails.filter(m => m.address !== addresses[i].address).length; addresses.splice(i, 1); } return { meta: { changes: 1 } }; }
@@ -23,6 +23,7 @@ function mockDB() {
     if (sql.startsWith("SELECT user_id FROM addresses WHERE address")) { const a = addresses.find(x => x.address === binds[0]); return a ? { user_id: a.user_id } : null; }
     if (sql.startsWith("SELECT address FROM addresses WHERE id")) { const a = addresses.find(x => x.id === binds[0] && x.user_id === binds[1]); return a ? { address: a.address } : null; }
     if (sql.startsWith("SELECT address, label")) { const a = addresses.find(x => x.id === binds[0] && x.user_id === binds[1]); return a ? { address: a.address, label: a.label } : null; }
+    if (sql.includes("FROM mails WHERE id")) { return mails.find(m => m.id === binds[0]) || null; }
     if (sql.includes("ORDER BY last_used DESC LIMIT 1")) { const list = addresses.filter(a => a.user_id === binds[0]); return list[0] || null; }
     throw new Error("unknown first sql: " + sql);
   };
@@ -54,7 +55,9 @@ globalThis.fetch = async (url, opts) => {
   return origFetch(url, opts);
 };
 
-const worker = (await import("./worker.js")).default;
+const _mod = await import("./worker.js");
+const worker = _mod.default;
+const extractOtp = _mod.extractOtp;
 const upd = (o) => ({ request: new Request("https://w.dev/webhook", { method: "POST", body: JSON.stringify(o) }), env });
 
 const assert = (name, cond) => console.log((cond ? "✅" : "❌ FAIL") + " " + name);
@@ -70,22 +73,22 @@ await worker.fetch(upd({ callback_query: { id: "c1", from: { id: 1 }, data: "pic
 assert("random create", sent.at(-1).text.includes("آدرس تصادفی") && sent.at(-1).text.includes("@mesterio.life"));
 const addr1 = sent.at(-1).text.match(/<code>([^<]+)<\/code>/)[1];
 
-// 3. custom address on second domain
-await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make rez.custom@iprez.dpdns.org" } }).request, env);
-assert("custom create", sent.at(-1).text.includes("rez.custom@iprez.dpdns.org"));
+// 3. custom address on the only domain
+await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make rez.custom@mesterio.life" } }).request, env);
+assert("custom create", sent.at(-1).text.includes("rez.custom@mesterio.life"));
 
 // 4. invalid custom
 await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make x" } }).request, env);
 assert("invalid name rejected", sent.at(-1).text.includes("❌"));
 
 // 5. duplicate
-await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make rez.custom@iprez.dpdns.org" } }).request, env);
+await worker.fetch(upd({ message: { chat: { id: 1 }, from: { id: 1 }, text: "/make rez.custom@mesterio.life" } }).request, env);
 assert("duplicate rejected", sent.at(-1).text.includes("قبلاً گرفته شده"));
 
 // 6. myemail lists 2 addresses
 await worker.fetch(upd({ callback_query: { id: "c2", from: { id: 1 }, data: "myemail", message: { chat: { id: 1 }, message_id: 6 } } }).request, env);
 const meText = JSON.stringify(sent.at(-1));
-assert("myemail shows both", meText.includes(addr1) && meText.includes("rez.custom@iprez.dpdns.org"));
+assert("myemail shows both", meText.includes(addr1) && meText.includes("rez.custom@mesterio.life"));
 
 // 7. inbound email to addr1 → notify owner 1
 const emailMsg = { to: addr1, from: "svc@example.com", raw: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("From: svc@example.com\r\nSubject: OTP 8899\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nYour code: 8899")); c.close(); } }) };
@@ -99,7 +102,10 @@ assert("unknown dropped silently", sent.length === 0);
 
 // 9. inbox of addr1 shows mail
 await worker.fetch(upd({ callback_query: { id: "c3", from: { id: 1 }, data: `inbox:${addr1}`, message: { chat: { id: 1 }, message_id: 7 } } }).request, env);
-assert("inbox shows OTP", sent.at(-1).text.includes("8899"));
+assert("inbox lists subject", sent.at(-1).text.includes("OTP 8899"));
+const mailBtn = JSON.stringify(sent.at(-1)).match(/mail:(\d+):\d+/);
+await worker.fetch(upd({ callback_query: { id: "c3b", from: { id: 1 }, data: `mail:${mailBtn[1]}:0`, message: { chat: { id: 1 }, message_id: 7 } } }).request, env);
+assert("mail detail shows OTP", sent.at(-1).text.includes("8899"));
 
 // 10. isolation: user2 inbox denied for addr1
 await worker.fetch(upd({ callback_query: { id: "c4", from: { id: 2 }, data: `inbox:${addr1}`, message: { chat: { id: 2 }, message_id: 8 } } }).request, env);
@@ -124,4 +130,17 @@ assert("all addresses preserved", JSON.stringify(sent.at(-1)).includes("rez.cust
 const r = await worker.fetch(new Request("https://w.dev/setwebhook"), env);
 assert("setwebhook", (await r.json()).ok === true);
 
-console.log("\n14 تست اجرا شد.");
+// 15. OTP extraction regression — no false positives
+const otpCases = [
+  ["Your confirmation code is 2096", "2096"],
+  ["653340 is your Avast one-time passcode", "653340"],
+  ["Order #209612 shipped today", null],
+  ["Posted 2024-09-16 at 10:00", null],
+  ["کد تایید شما: 482910", "482910"],
+  ["Welcome! Nothing to verify", null],
+];
+for (const [txt, exp] of otpCases) {
+  const got = extractOtp(txt);
+  assert("otp " + JSON.stringify(txt.slice(0, 28)), got === exp);
+}
+console.log("\n" + (15 + otpCases.length) + " تست اجرا شد.");

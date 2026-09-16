@@ -38,6 +38,8 @@ const answer = (env, id, text) => tg(env, "answerCallbackQuery", {
   callback_query_id: id, ...(text ? { text } : {}),
 });
 
+export { extractOtp }; // test-visible
+
 // ---------- main panel ----------
 function mainPanelKB(isAdmin = false) {
   const kb = [[
@@ -58,15 +60,13 @@ function domainKB(action, mode) {
 }
 
 function panelText(addrCount, domains) {
-  return `╭─────────────────────\n` +
-    `┃ 📬 <b>Temp Mail</b>\n` +
-    `┃ 🌐 دامنه‌ها: <code>${esc(domains)}</code>\n` +
-    `┃ 📮 آدرس‌های شما: <b>${addrCount}</b>\n` +
-    `╰─────────────────────\n\n` +
-    `🎲 <b>Random</b> — آدرس تصادفی بساز\n` +
-    `✏️ <b>Custom</b> — با اسم دلخواه بساز\n` +
-    `📬 <b>My Email</b> — همه آدرس‌هات و اینباکس‌ها\n\n` +
-    `💡 ایمیل که بیاد فوری خبر می‌دم؛ لینک‌های Confirm دکمه می‌شن — تپ کن باز شه!`;
+  return `📬 <b>Temp Mail</b> · <i>موقت و فوری</i>\n\n` +
+    `🌐 <code>${esc(domains)}</code>\n` +
+    `📮 <b>${addrCount}</b> آدرس فعال شما\n\n` +
+    `🎲 <b>Random</b> — آدرس تصادفی\n` +
+    `✏️ <b>Custom</b> — اسم دلخواه\n` +
+    `📬 <b>My Email</b> — همه آدرس‌هات\n\n` +
+    `⚡ ایمیل که برسه، همینجا فوری خبر می‌دم.`;
 }
 
 // ---------- DB init ----------
@@ -163,55 +163,68 @@ function extractLinks(body) {
   return [...new Set(urls.map(u => u.replace(/[.,;:)\]]+$/, "")))].slice(0, 5);
 }
 
-// استخراج کد OTP از متن ایمیل (۴ تا ۸ رقم، با کلمات کلیدی)
+// استخراج کد OTP — فقط با لنگر کلمه‌ای؛ عدد بی‌لنگر (سفارش/سال/آی‌پی) هرگز کد نیست
 function extractOtp(body) {
   if (!body) return null;
-  const patterns = [
-    /(?:code|otp|pin|password|verification|confirm|token|کد)\s*(?:is|:|=)?\s*\D{0,10}\b(\d{4,8})\b/i,
-    /\b(\d{6})\b/, // ۶ رقم — رایج‌ترین
-    /\b(\d{4,8})\b/,
-  ];
-  for (const re of patterns) {
-    const m = body.match(re);
-    if (m) return m[1];
+  const BAD_HEAD = /(zip|postal|barcode|area|country|error|status|version|invoice|order|phone|http|tracking|reference)\s*$/i;
+  const clean = (raw) => {
+    const n = (raw || "").replace(/[,\s]/g, "");
+    return /^\d{4,8}$/.test(n) ? n : null;
+  };
+  // ۱) «code: 123456» / «verification code is 1234»
+  const re1 = /\b(?:(?:verification|security|confirmation|one[\s\-]?time|access|login)[\s\-]+)?(code|otp|passcode|pin|token)\s*(?:is|:|=|-)?\s*\D{0,6}?(\d{1,3}(?:[,\s]\d{3})+|\d{4,8})(?![\d.\-])/i;
+  // ۱b) فارسی: «کد تایید شما: 123456» / «کد یکبار مصرف ۱۲۳۴»
+  const reFa = /کد[\s\S]{0,20}?[:=\s]*(\d{4,8}|[۰-۹]{4,8})(?![\d.\-])/;
+  // ۲) «123456 is your one-time passcode»
+  const re2 = /\b(\d{4,8})(?![\d.\-])\s+(?:is|was)\s+your\s+[a-z\s\-]{0,20}?(?:code|otp|passcode|pin)\b/i;
+  const faDigits = (s) => s && /[۰-۹]/.test(s) ? s.replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)) : s;
+  const mf = body.match(reFa);
+  if (mf) { const c = clean(faDigits(mf[1])); if (c) return c; }
+  let m = body.match(re1);
+  if (m) {
+    const ctx = body.slice(Math.max(0, (m.index || 0) - 16), m.index);
+    if (!BAD_HEAD.test(ctx)) { const c = clean(m[2]); if (c) return c; }
   }
+  m = body.match(re2);
+  if (m) { const c = clean(m[1]); if (c) return c; }
   return null;
 }
 
 async function inboxText(db, address, offset = 0) {
   const PAGE = 10;
   const rows = await db.prepare(
-    "SELECT sender, subject, body, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT ? OFFSET ?"
+    "SELECT id, sender, subject, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT ? OFFSET ?"
   ).bind(address, PAGE + 1, offset).all();
   const hasMore = (rows.results || []).length > PAGE;
   const list = (rows.results || []).slice(0, PAGE);
-  const out = [`📥 <b>Inbox:</b> <code>${esc(address)}</code>\n`];
+  const out = [`📥 <code>${esc(address)}</code>`, ""];
   if (!list.length) {
-    out.push(offset > 0 ? "📭 به همینجا رسیدیم — ایمیل قدیمی‌تری نیست." : "📭 هنوز ایمیلی به این آدرس نرسیده.\n⏳ منتظر ایمیل بمون یا ازش برای ثبت‌نام استفاده کن!");
-    return { text: out.join("\n"), links: [], otps: [], hasMore: false };
+    out.push(offset > 0 ? "📭 ایمیل قدیمی‌تری نیست." : "📭 هنوز ایمیلی نرسیده…\n⏳ همین صفحه رو با 🔄 رفرش کن.");
+    return { text: out.join("\n"), hasMore, offset, list };
   }
-  let newestLinks = [], newestOtps = [];
+  out.push(`◽️ <b>${list.length}</b> ایمیل — برای خوندن بزن👇`);
   for (const m of list) {
-    const t = new Date(m.received_at * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC";
-    // نمایش متن بدون لینک‌ها (لینک‌ها دکمه می‌شن)
-    const clean = (m.body || "")
-      .replace(/(https?:\/\/[^\s)<>"']+)/g, "")
-      .replace(/[ \t]+/g, " ")
-      .replace(/\n\s*\n\s*\n+/g, "\n\n")
-      .replace(/\s*\(\s*\)/g, "")
-      .trim();
-    const links = extractLinks(m.body);
-    const otp = extractOtp(m.body);
-    if (!newestLinks.length) newestLinks = links;
-    if (!newestOtps.length && otp) newestOtps = [{ code: otp, subject: m.subject || "" }];
+    const t = new Date(m.received_at * 1000).toISOString().slice(5, 16).replace("T", " ");
     const who = (m.sender || "?").replace(/^"?([^"<]+)"?\s*</, "$1").replace(/<[^>]*>/, "").trim();
-    // کد OTP بزرگ و برجسته داخل کارت
-    const otpLine = otp ? `\n🔐 <b>کد:</b> <code><b>${otp}</b></code>\n` : "";
-    out.push(`━━━━━━━━━━━━━━\n✉️ <b>From:</b> ${esc(who)}\n` +
-      `📌 <b>Subject:</b> ${esc(m.subject) || "(بدون موضوع)"}\n` +
-      `🕐 ${t}${otpLine}\n${esc(clean.slice(0, 900)) || "(خالی)"}`);
+    out.push(`▪️ <b>${esc((m.subject || "(بدون موضوع)").slice(0, 46))}</b>\n   <i>${esc(who.slice(0, 28))}</i> · 🕐 ${t}`);
   }
-  return { text: out.join("\n"), links: newestLinks, otps: newestOtps, hasMore, offset };
+  return { text: out.join("\n").slice(0, 3900), hasMore, offset, list };
+}
+
+// نمای بازِ یک ایمیل: متن کامل + لینک‌ها + OTP
+async function mailDetail(db, id) {
+  const m = await db.prepare("SELECT address, sender, subject, body, received_at FROM mails WHERE id = ?").bind(id).first();
+  if (!m) return null;
+  const t = new Date(m.received_at * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  const clean = (m.body || "")
+    .replace(/(https?:\/\/[^\s)<>"']+)/g, "")
+    .replace(/[ \t]+/g, " ").replace(/\n\s*\n\s*\n+/g, "\n\n").replace(/\s*\(\s*\)/g, "").trim();
+  const links = extractLinks(m.body);
+  const otp = extractOtp(m.body);
+  const who = (m.sender || "?").replace(/^"?([^"<]+)"?\s*</, "$1").replace(/<[^>]*>/, "").trim();
+  const otpLine = otp ? `\n\n🔐 <b>کد:</b> <code><b>${otp}</b></code>\n` : "\n";
+  const text = `📌 <b>${esc(m.subject || "(بدون موضوع)")}</b>\n✉️ ${esc(who.slice(0, 60))}\n🕐 ${t}${otpLine}\n${esc(clean.slice(0, 1500)) || "(خالی)"}`;
+  return { text: text.slice(0, 3900), links, otp, address: m.address, id };
 }
 
 function linkLabel(u) {
@@ -228,18 +241,15 @@ function linkLabel(u) {
   } catch { return "🔗 Open Link"; }
 }
 
-function inboxKB(address, links = [], otps = [], hasMore = false, offset = 0) {
+function inboxKB(address, list = [], hasMore = false, offset = 0) {
   const kb = [];
-  // 🔐 دکمه کپی OTP — بالای همه دکمه‌ها
-  for (const o of (otps || [])) {
-    kb.push([{ text: `🔐 کپی کد: ${o.code}`, callback_data: `copyotp:${o.code}` }]);
-  }
-  // دکمه‌های لینک — تپ مستقیم، بدون کپی
-  for (const u of links) {
-    kb.push([{ text: linkLabel(u), url: u }]);
+  // هر ایمیل یک دکمه — تپ = باز شدن کامل
+  for (const m of (list || []).slice(0, 8)) {
+    const label = (m.subject || "(بدون موضوع)").slice(0, 34);
+    kb.push([{ text: `📩 ${label}`, callback_data: `mail:${m.id}:${offset}` }]);
   }
   const nav = [{ text: "🔄 Refresh", callback_data: `inbox:${address}` }];
-  if (hasMore) nav.push({ text: `⬅️ قدیمی‌ترها (صفحه ${Math.floor(offset / 10) + 2})`, callback_data: `inboxpage:${address}:${offset + 10}` });
+  if (hasMore) nav.push({ text: "⬅️ قدیمی‌ترها", callback_data: `inboxpage:${address}:${offset + 10}` });
   kb.push(nav);
   kb.push([
     { text: "📬 My Email", callback_data: "myemail" },
@@ -475,7 +485,7 @@ async function handleUpdate(env, upd) {
       .bind(userId, addr).first();
     if (!own) return sendMsg(env, chatId, "⛔️ این آدرس مال شما نیست.");
     const v = await inboxText(db, addr);
-    return sendMsg(env, chatId, v.text, inboxKB(addr, v.links));
+    return sendMsg(env, chatId, v.text, inboxKB(addr, v.list, v.hasMore, 0));
   }
 
   // /setdomain (admin) — sync check
@@ -547,7 +557,7 @@ async function handleCallback(env, db, q) {
       await db.prepare("UPDATE addresses SET last_used = ? WHERE address = ?")
         .bind(Math.floor(Date.now() / 1000), addr).run();
       const v = await inboxText(db, addr, 0);
-      return await edit(v.text, inboxKB(addr, v.links, v.otps, v.hasMore, 0));
+      return await edit(v.text, inboxKB(addr, v.list, v.hasMore, 0));
     }
 
     if (data.startsWith("inboxpage:")) {
@@ -560,7 +570,24 @@ async function handleCallback(env, db, q) {
         .bind(userId, addr).first();
       if (!own) { await answer(env, q.id, "⛔️ این آدرس مال شما نیست."); return "ok"; }
       const v = await inboxText(db, addr, offset);
-      return await edit(v.text, inboxKB(addr, v.links, v.otps, v.hasMore, offset));
+      return await edit(v.text, inboxKB(addr, v.list, v.hasMore, offset));
+    }
+
+    if (data.startsWith("mail:")) {
+      // mail:mailId:backOffset — نمایش کامل ایمیل
+      const [, idS, backS] = data.split(":");
+      const id = parseInt(idS);
+      const backOffset = parseInt(backS) || 0;
+      const m = await mailDetail(db, id);
+      if (!m) { await answer(env, q.id, "🗑 این ایمیل حذف شده."); return "ok"; }
+      const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?")
+        .bind(userId, m.address).first();
+      if (!own) { await answer(env, q.id, "⛔️ مال شما نیست."); return "ok"; }
+      const kb = [];
+      if (m.otp) kb.push([{ text: `🔐 کپی کد: ${m.otp}`, callback_data: `copyotp:${m.otp}` }]);
+      for (const u of m.links) kb.push([{ text: linkLabel(u), url: u }]);
+      kb.push([{ text: "⬅️ بازگشت به اینباکس", callback_data: `inboxpage:${m.address}:${backOffset}` }]);
+      return await edit(m.text, kb.length ? kb : undefined);
     }
 
     if (data.startsWith("copyotp:")) {
