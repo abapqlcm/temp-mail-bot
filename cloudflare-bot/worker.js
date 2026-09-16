@@ -874,6 +874,13 @@ export default {
   },
 
   async email(message, env) {
-    await handleEmail(env, message);
+    console.log("EMAIL-IN to=" + message.to + " from=" + message.from);
+    try {
+      await handleEmail(env, message);
+      console.log("EMAIL-OK to=" + message.to);
+    } catch (e) {
+      console.log("EMAIL-BOOM " + (e && e.message) + " | " + (e && e.stack || "").slice(0, 500));
+      throw e;
+    }
   },
 };
