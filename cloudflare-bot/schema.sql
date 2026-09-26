@@ -8,7 +8,9 @@ CREATE TABLE IF NOT EXISTS addresses (
   label TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
   last_used INTEGER DEFAULT 0,
-  expires_at INTEGER DEFAULT 0
+  expires_at INTEGER DEFAULT 0,
+  -- مینی‌اپ: برای نشان دادن «جدید» روی هر آدرس
+  last_seen INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS mails (
@@ -23,3 +25,7 @@ CREATE TABLE IF NOT EXISTS mails (
 
 CREATE INDEX IF NOT EXISTS idx_addr_user ON addresses(user_id);
 CREATE INDEX IF NOT EXISTS idx_mails_addr ON mails(address, received_at DESC);
+
+-- مینی‌اپ: ایمیل‌های گرافیکی (HTML-only) بخش HTML خام رو برای رندر تو iframe نگه می‌داریم
+-- (از طریق ALTER_SQLS توی worker.js اجرا می‌شه)
+-- ALTER TABLE mails ADD COLUMN html_raw TEXT DEFAULT '';

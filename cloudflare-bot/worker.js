@@ -9,6 +9,8 @@
  */
 
 const DOMAINS = ["mesterio.life"];
+// آدرس عمومی ورکر — برای دکمه‌ی مینی‌اپ. از env.WORKER_BASE هم قابل تنظیمه.
+const WORKER_BASE = "https://temp-mail-bot.r65.workers.dev";
 
 // ---------- helpers ----------
 const esc = (t) => (t || "").toString()
@@ -49,6 +51,9 @@ function mainPanelKB(isAdmin = false) {
     { text: "✏️ Custom", callback_data: "dom:new:custom" },
   ], [
     { text: "📬 My Email", callback_data: "myemail" },
+  ], [
+    // مینی‌اپ: کل میل‌باکس تو یه صفحه‌ی گرافیکی، ایمیل‌های گرافیکی هم درست نمایش داده می‌شن
+    { text: "🖥 Mailbox App", web_app: { url: `${WORKER_BASE}/mini` } },
   ]];
   // پنل ادمین فقط با /panel — در منوی اصلی نیست
   return kb;
@@ -97,13 +102,19 @@ CREATE INDEX IF NOT EXISTS idx_mails_addr ON mails(address, received_at DESC);
 
 // مهاجرت + پاکسازی — یک‌بار به ازای هر isolate، batch با prepared statements
 // (D1 فقط prepared statement یا رشته قبول می‌کنه؛ آبجکت {sql} = Malformed input!)
+// نکته: ALTER TABLE‌ها توی INIT_SQL هستن ولی D1 نمی‌تونه ALTER رو توی batch
+// با CREATE اجرا کنه — اگه ستون از قبل موجود باشه خطا می‌ده، پس مستقل و safe اجرا می‌شن.
 let dbReady = null;
 let lastCleanup = 0;
 const INIT_SQLS = INIT_SQL.split(";").map(s => s.trim()).filter(Boolean);
+const ALTER_SQLS = [
+  "ALTER TABLE addresses ADD COLUMN last_seen INTEGER DEFAULT 0",
+  "ALTER TABLE mails ADD COLUMN html_raw TEXT DEFAULT ''",
+];
 async function initDB(db) {
   if (!dbReady) {
     dbReady = (async () => {
-      const stmts = () => INIT_SQLS.map(s => db.prepare(s));
+      const stmts = () => INIT_SQLS.filter(s => !s.startsWith("ALTER")).map(s => db.prepare(s));
       try {
         await db.batch(stmts());
       } catch {
@@ -115,6 +126,10 @@ async function initDB(db) {
           console.log("batch-init fallback:", e2 && e2.message);
           for (const s of INIT_SQLS) await db.prepare(s).run();
         }
+      }
+      // ALTER‌های مینی‌اپ — هر کدوم جدا، خطای «ستون موجود» نادیده گرفته می‌شه
+      for (const a of ALTER_SQLS) {
+        try { await db.prepare(a).run(); } catch { /* ستون از قبل وجود داره */ }
       }
     })().catch(e => { dbReady = null; throw e; });
   }
@@ -844,7 +859,35 @@ function parseEmail(raw) {
     from: getHeader("From"),
     subject: decodeMimeWords(getHeader("Subject")),
     body: picked || "(بدون متن قابل نمایش)",
+    // HTML خام برای ایمیل‌های گرافیکی — مینی‌اپ داخل iframe سندباکس‌شده رندرش می‌کنه
+    html: textHtml || null,
   };
+}
+
+// HTML خام ایمیل‌های گرافیکی رو برای رندر تو iframe سندباکس‌شده امن و سبک می‌کنه:
+// اسکریپت/استایل/ردیاب حذف، URL‌های مطلق تصاویر حفظ، اندازه محدود.
+function cleanHtmlForSandbox(html) {
+  let t = String(html || "");
+  if (!t) return null;
+  // حذف اسکریپت، استایل، و بلوک‌های ردیاب
+  t = t.replace(/<script[\s\S]*?<\/script>/gi, "");
+  t = t.replace(/<style[\s\S]*?<\/style>/gi, "");
+  t = t.replace(/<noscript[\s\S]*?<\/noscript>/gi, "");
+  t = t.replace(/<head[\s\S]*?<\/head>/gi, "");
+  // ردیاب‌های پیکسلی و لینک‌های ردیابی
+  t = t.replace(/<img[^>]*(?:width|height)\s*=\s*["']?1["']?[^>]*>/gi, "");
+  t = t.replace(/<img[^>]*display\s*:\s*none[^>]*>/gi, "");
+  // فرم‌ها (فیشینگ)
+  t = t.replace(/<form[\s\S]*?<\/form>/gi, "");
+  // iframe/object/embed خارجی
+  t = t.replace(/<(iframe|object|embed)[\s\S]*?<\/\1>/gi, "");
+  // رویدادهای inline و javascript: URLs
+  t = t.replace(/\son\w+\s*=\s*"[^"]*"/gi, "");
+  t = t.replace(/\son\w+\s*=\s*'[^']*'/gi, "");
+  t = t.replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"');
+  // سقف حجم
+  if (t.length > 200000) t = t.slice(0, 200000);
+  return t || null;
 }
 
 function decodeMimeWords(s) {
@@ -868,10 +911,16 @@ async function handleEmail(env, message) {
 
   let to = (message.to || "").toLowerCase();
   let from = "", subject = "", body = "";
+  let htmlSnippet = null;
   try {
     // سقف حجم: بدنه‌های سنگین (تصویر base64) باعث timeout/CPU نمی‌شن
     const raw = (await new Response(message.raw).text()).slice(0, 300000);
-    ({ from, subject, body } = parseEmail(raw));
+    const parsed = parseEmail(raw);
+    ({ from, subject, body } = parsed);
+    // لایه‌ی HTML خام رو برای ایمیل‌های گرافیکی نگه دار (مینی‌اپ تو iframe رندرش می‌کنه)
+    if (parsed.html && parsed.html.length > 20) {
+      htmlSnippet = cleanHtmlForSandbox(parsed.html);
+    }
     subject = (subject || "").slice(0, 300);
   } catch (e) {
     // پارسر کرش کرد — متن خام رو حداقل ذخیره کن تا ایمیل گم نشه
@@ -888,8 +937,8 @@ async function handleEmail(env, message) {
   try {
     // آدرس‌های ناشناس هم ذخیره می‌شن تا اگر بعداً با /make ساخته شد، ایمیل‌های قبلی دیدنی باشن
     await db.prepare(
-      "INSERT INTO mails (address, sender, subject, body, received_at) VALUES (?, ?, ?, ?, ?)"
-    ).bind(to, from, subject, body, Math.floor(Date.now() / 1000)).run();
+      "INSERT INTO mails (address, sender, subject, body, raw_snippet, received_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(to, from, subject, body, htmlSnippet || null, Math.floor(Date.now() / 1000)).run();
   } catch (e) {
     console.log("DB insert fail:", e && e.message);
     return; // اعلان بی‌معنه اگر ذخیره نشد
@@ -916,6 +965,204 @@ async function handleEmail(env, message) {
   } catch (e) { console.log("notify fail:", e && e.message); }
 }
 
+// ---------- mini app: احراز هویت + API ----------
+// initData تلگرام رو با HMAC-SHA256 اعتبارسنجی می‌کنیم (روش رسمی تلگرام).
+// کلاینت نمی‌تونه user_id رو جعل کنه — فقط کاربر واقعی به این داده‌ها می‌رسه.
+async function verifyInitData(env, initData) {
+  if (!initData) return null;
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get("hash");
+    params.delete("hash");
+    const dataCheck = [...params.entries()]
+      .map(([k, v]) => k + "=" + v)
+      .sort()
+      .join("\n");
+    const secret = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode("WebAppData"),
+      { name: "HMAC", hash: "SHA-256" },
+      false, ["sign"]
+    );
+    const ikm = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(env.BOT_TOKEN),
+      { name: "HMAC", hash: "SHA-256" },
+      false, ["sign"]
+    );
+    const sig = new Uint8Array(await crypto.subtle.sign("HMAC", ikm, new TextEncoder().encode("WebAppData")));
+    const key = await crypto.subtle.importKey("raw", sig, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const expect = Array.from(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(dataCheck))))
+      .map(b => b.toString(16).padStart(2, "0")).join("");
+    if (expect !== hash) return null;
+    const userRaw = params.get("user");
+    if (!userRaw) return null;
+    const u = JSON.parse(decodeURIComponent(userRaw));
+    // جلوگیری از replay: auth_date نباید خیلی قدیمی باشه (۷ روز)
+    const authDate = parseInt(params.get("auth_date") || "0");
+    if (authDate && (Date.now() / 1000 - authDate) > 7 * 86400) return null;
+    return u && u.id ? u : null;
+  } catch { return null; }
+}
+
+// HTML مینی‌اپ از ASSETS (یا fallback لوکال) سرو می‌شه
+let _miniHtmlCache = null;
+async function getMiniHtml(env) {
+  if (_miniHtmlCache) return _miniHtmlCache;
+  // Worker Bundle: فایل به‌صورت static asset کنار worker نیست؛ پس از env.MINI_HTML
+  // (در صورت تنظیم) یا کلون محلی استفاده می‌کنیم. در توسعه، fallback لوکال.
+  if (env.MINI_HTML) { _miniHtmlCache = env.MINI_HTML; return _miniHtmlCache; }
+  try {
+    // اگه ASSETS binding موجود باشه (Workers Sites / static assets)
+    const a = env.ASSETS && await env.ASSETS.fetch(new Request("https://x/mini.html"));
+    if (a && a.ok) { _miniHtmlCache = await a.text(); return _miniHtmlCache; }
+  } catch {}
+  // fallback: یک صفحه‌ی حداقلی که می‌گه فایل آپلود نشده
+  _miniHtmlCache = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"></head>
+    <body style="background:#0d0d10;color:#f2f2f5;font-family:sans-serif;text-align:center;padding:60px 20px">
+    <h2>📬 Aurora Mail</h2><p style="color:#8e8e9c;margin-top:14px">فایل مینی‌اپ هنوز آپلود نشده.<br>
+    MINI_HTML binding یا ASSETS لازم است.</p></body></html>`;
+  return _miniHtmlCache;
+}
+
+// ---------- mini app: API ----------
+async function handleMiniApi(request, env, url) {
+  const db = env.DB;
+  const path = url.pathname.replace(/^\/mini/, "");
+  const method = request.method;
+
+  // احراز هویت: initData از هدر X-Tg-Init-Data یا query
+  const initData = request.headers.get("X-Tg-Init-Data") || url.searchParams.get("init_data") || "";
+  // در توسعه/تست لوکال، اگه DEV_UID ست شده باشه اجازه بده
+  let user = await verifyInitData(env, initData);
+  if (!user && env.MINI_DEV_UID) {
+    user = { id: parseInt(env.MINI_DEV_UID), first_name: "Dev" };
+  }
+  if (!user) return json({ error: "احراز هویت نامعتبر" }, 401);
+
+  try {
+    await initDB(db);
+
+    // ---- meta ----
+    if (path === "/meta") {
+      return json({ domain: env.MAIL_DOMAIN || (DOMAINS[0] || ""), user: { id: user.id, name: user.first_name || "" } });
+    }
+
+    // ---- inbox ----
+    if (path === "/inbox") {
+      const addr = url.searchParams.get("addr");
+      let rows;
+      if (addr) {
+        // فقط آدرس خود کاربر
+        const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?").bind(user.id, addr).first();
+        if (!own) return json({ error: "آدرس متعلق به شما نیست" }, 403);
+        rows = await db.prepare(
+          "SELECT id, address, sender, subject, body, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT 40"
+        ).bind(addr).all();
+      } else {
+        const addrs = await db.prepare("SELECT address FROM addresses WHERE user_id = ?").bind(user.id).all();
+        const list = (rows2) => (rows2.results || []).map(r => r.address);
+        const all = list(addrs);
+        if (!all.length) return json({ mails: [], active: null });
+        rows = await db.prepare(
+          `SELECT id, address, sender, subject, body, received_at FROM mails
+           WHERE address IN (${all.map(() => "?").join(",")})
+           ORDER BY received_at DESC, id DESC LIMIT 40`
+        ).bind(...all).all();
+      }
+      const mails = (rows.results || []).map(m => ({
+        id: m.id,
+        address: m.address,
+        sender: prettySender(m.sender),
+        subject: m.subject || "",
+        body: m.body || "",
+        received_at: m.received_at,
+        // snippet از لایه‌ی HTML خام (برای ایمیل‌های گرافیکی)
+        html_snippet: m.raw_snippet || null,
+      }));
+      return json({ mails, active: addr || null });
+    }
+
+    // ---- single mail ----
+    if (path.startsWith("/mail/")) {
+      const id = parseInt(path.split("/")[2]);
+      if (!id) return json({ error: "آیدی نامعتبر" }, 400);
+      const m = await db.prepare(
+        "SELECT id, address, sender, subject, body, raw_snippet, received_at FROM mails WHERE id = ?"
+      ).bind(id).first();
+      if (!m) return json({ error: "ایمیل پیدا نشد" }, 404);
+      const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?").bind(user.id, m.address).first();
+      if (!own) return json({ error: "دسترسی غیرمجاز" }, 403);
+      return json({
+        id: m.id,
+        address: m.address,
+        sender: prettySender(m.sender),
+        subject: m.subject || "",
+        body: m.body || "",
+        html_snippet: m.raw_snippet || null,
+        received_at: m.received_at,
+      });
+    }
+
+    // ---- addresses ----
+    if (path === "/addresses" && method === "GET") {
+      const rows = await db.prepare(
+        "SELECT a.id, a.address, a.label, a.created_at, a.last_used, a.last_seen, COUNT(m.id) AS mail_count, MAX(m.received_at) AS last_mail_at FROM addresses a LEFT JOIN mails m ON m.address = a.address WHERE a.user_id = ? GROUP BY a.id ORDER BY a.last_used DESC"
+      ).bind(user.id).all();
+      const addresses = (rows.results || []).map(a => ({
+        id: a.id,
+        address: a.address,
+        label: a.label || "",
+        created_at: a.created_at,
+        last_used: a.last_used || 0,
+        last_seen: a.last_seen || 0,
+        last_mail_at: a.last_mail_at || 0,
+        mail_count: a.mail_count || 0,
+      }));
+      return json({ addresses });
+    }
+
+    // ---- create address ----
+    if (path === "/address" && method === "POST") {
+      let body = {};
+      try { body = await request.json(); } catch {}
+      const local = (body.name || "").trim();
+      const res = await createAddress(env, db, user.id, local, null);
+      if (res.error) return json({ error: res.error }, 400);
+      // آدرس جدید رو last_seen کن (بدون ایمیل)
+      await db.prepare("UPDATE addresses SET last_seen = ? WHERE address = ?")
+        .bind(Math.floor(Date.now() / 1000), res.address).run();
+      return json({ address: res.address });
+    }
+
+    // ---- delete address ----
+    if (path.startsWith("/address/") && method === "DELETE") {
+      const id = parseInt(path.split("/")[2]);
+      if (!id) return json({ error: "آیدی نامعتبر" }, 400);
+      const own = await db.prepare("SELECT address FROM addresses WHERE id = ? AND user_id = ?").bind(id, user.id).first();
+      if (!own) return json({ error: "آدرس پیدا نشد" }, 404);
+      await db.batch([
+        db.prepare("DELETE FROM mails WHERE address = ?").bind(own.address),
+        db.prepare("DELETE FROM addresses WHERE id = ?").bind(id),
+      ]);
+      return json({ ok: true });
+    }
+
+    return json({ error: "مسیر پیدا نشد" }, 404);
+  } catch (e) {
+    return json({ error: String(e && e.message || e) }, 500);
+  }
+}
+
+// اسم فرستنده رو از فرمت ایمیل استاندارد تمیز می‌کنه: "Symlexvpn" <a@b.c> → Symlexvpn
+function prettySender(sender) {
+  if (!sender) return "";
+  const m = sender.match(/^"([^"]+)"\s*</);
+  if (m) return m[1];
+  return sender.replace(/<[^>]+>/, "").trim() || sender;
+}
+
 // ---------- worker entry ----------
 export default {
   async fetch(request, env, ctx) {
@@ -923,6 +1170,18 @@ export default {
       envAdmins = env.ADMIN_IDS || "";
 
     if (url.pathname === "/health") return new Response("ok");
+
+    // ================= MINI APP =================
+    // Aurora Mail — Telegram Mini App. فایل HTML استاتیک سرو می‌شه و
+    // همه‌ی داده‌ها از /mini/* میاد. احراز هویت با initData تلگرام.
+    if (url.pathname === "/mini" || url.pathname === "/mini/") {
+      const html = await getMiniHtml(env);
+      return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" } });
+    }
+    if (url.pathname.startsWith("/mini/")) {
+      envAdmins = env.ADMIN_IDS || "";
+      return handleMiniApi(request, env, url);
+    }
 
     // عیب‌یابی: نمای خودِ ورکر از D1 (جدول‌ها + شمارش)
     if (url.pathname === "/dbtest") {
