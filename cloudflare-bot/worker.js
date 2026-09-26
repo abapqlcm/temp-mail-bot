@@ -823,6 +823,18 @@ function parseEmail(raw) {
   }
 
   let picked = textPlain !== null ? textPlain.trim() : null;
+  // اگه textPlain عمدتاً از URL‌های ردیابی طولانی تشکیل شده (مثل لایه‌ی plain
+  // ایمیل‌های Brevo/Sendinblue که فقط redirect link‌ها رو دارن)، بی‌ارزشه.
+  // در اون حالت لایه‌ی HTML بهتره — htmlToText لینک‌ها رو به "متن (url)" تبدیل می‌کنه.
+  const trackingRatio = (() => {
+    const urls = (picked || "").match(/https?:\/\/\S{40,}/g) || [];
+    const urlChars = urls.reduce((a, u) => a + u.length, 0);
+    const total = (picked || "").length;
+    return total ? urlChars / total : 0;
+  })();
+  if (trackingRatio > 0.5 && textHtml !== null) {
+    picked = htmlToText(textHtml);
+  }
   if ((!picked || picked.length < 5) && textHtml !== null) {
     picked = htmlToText(textHtml);
   }
