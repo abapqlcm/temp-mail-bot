@@ -14,6 +14,13 @@ async function run(mod) {
       const bound = (...b) => ({
         run: async () => {
           const s = sql.trim();
+          if (s.startsWith("PRAGMA table_info")) {
+            return { results: [
+              { name: "id" }, { name: "address" }, { name: "sender" },
+              { name: "subject" }, { name: "body" }, { name: "raw_snippet" },
+              { name: "received_at" },
+            ] };
+          }
           if (s.startsWith("INSERT INTO mails")) {
             mails.push({ id: mails.length + 1, address: b[0], sender: b[1], subject: b[2], body: b[3], raw_snippet: b[4], received_at: b[5] });
             return { meta: { changes: 1 } };

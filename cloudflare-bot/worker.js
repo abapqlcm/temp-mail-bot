@@ -902,6 +902,28 @@ function decodeMimeWords(s) {
   });
 }
 
+// ایمیل رو امن وارد می‌کنه: اگه ستون raw_snippet موجود نباشه (DB قدیمی)،
+// بدون اون درج می‌کنه تا ایمیل‌ها هرگز گم نشن.
+let _mailColsCache = null;
+async function insertMailSafe(db, to, from, subject, body, snippet) {
+  if (_mailColsCache === null) {
+    try {
+      const info = await db.prepare("PRAGMA table_info(mails)").all();
+      _mailColsCache = new Set((info.results || []).map(c => c.name));
+    } catch { _mailColsCache = new Set(["id","address","sender","subject","body","received_at"]); }
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (_mailColsCache.has("raw_snippet")) {
+    await db.prepare(
+      "INSERT INTO mails (address, sender, subject, body, raw_snippet, received_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(to, from, subject, body, snippet || null, now).run();
+  } else {
+    await db.prepare(
+      "INSERT INTO mails (address, sender, subject, body, received_at) VALUES (?, ?, ?, ?, ?)"
+    ).bind(to, from, subject, body, now).run();
+  }
+}
+
 async function handleEmail(env, message) {
   const db = env.DB;
   // envAdmins اینجا هم ست می‌شه — اگه نه، isAdmin تو مسیر ایمیل undefined برمی‌گردونه
@@ -936,9 +958,8 @@ async function handleEmail(env, message) {
 
   try {
     // آدرس‌های ناشناس هم ذخیره می‌شن تا اگر بعداً با /make ساخته شد، ایمیل‌های قبلی دیدنی باشن
-    await db.prepare(
-      "INSERT INTO mails (address, sender, subject, body, raw_snippet, received_at) VALUES (?, ?, ?, ?, ?, ?)"
-    ).bind(to, from, subject, body, htmlSnippet || null, Math.floor(Date.now() / 1000)).run();
+    // نکته: raw_snippet ممکنه توی DB قدیمی موجود نباشه — اول امن‌سازی می‌کنیم
+    await insertMailSafe(db, to, from, subject, body, htmlSnippet);
   } catch (e) {
     console.log("DB insert fail:", e && e.message);
     return; // اعلان بی‌معنه اگر ذخیره نشد
@@ -1009,15 +1030,13 @@ async function verifyInitData(env, initData) {
 let _miniHtmlCache = null;
 async function getMiniHtml(env) {
   if (_miniHtmlCache) return _miniHtmlCache;
-  // Worker Bundle: فایل به‌صورت static asset کنار worker نیست؛ پس از env.MINI_HTML
-  // (در صورت تنظیم) یا کلون محلی استفاده می‌کنیم. در توسعه، fallback لوکال.
+  // bundle: HTML به‌عنوان module JS ضمیمه شده (ورکر‌های ES module فقط JS قبول می‌کنن)
+  try { _miniHtmlCache = (await import("./mini_html.js")).default; return _miniHtmlCache; } catch {}
   if (env.MINI_HTML) { _miniHtmlCache = env.MINI_HTML; return _miniHtmlCache; }
   try {
-    // اگه ASSETS binding موجود باشه (Workers Sites / static assets)
     const a = env.ASSETS && await env.ASSETS.fetch(new Request("https://x/mini.html"));
     if (a && a.ok) { _miniHtmlCache = await a.text(); return _miniHtmlCache; }
   } catch {}
-  // fallback: یک صفحه‌ی حداقلی که می‌گه فایل آپلود نشده
   _miniHtmlCache = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1"></head>
     <body style="background:#0d0d10;color:#f2f2f5;font-family:sans-serif;text-align:center;padding:60px 20px">
