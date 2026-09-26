@@ -91,3 +91,40 @@ await worker.email({ to: "test@mesterio.life", raw: new Response(raw3).body }, e
 m = mails.at(-1);
 console.log("\nCASE3 body:", JSON.stringify(m.body.slice(0, 120)));
 console.log(!m.body.includes("<html") && (m.body.includes("1122")) ? "✅ CASE3: nested handled" : "❌ CASE3: nested failed");
+
+// ---- Case 4: ایمیل واقعی Symlex VPN (non-multipart, quoted-printable با =E2=80=99)
+// این کیس باگ اصلی بود: ' میان‌بایت decode نمی‌شد چون بایت بعدی URL-safe بود.
+sent.length = 0;
+const raw4 = [
+  "From: Symlex <no-reply@symlexvpn.org>",
+  "To: test@mesterio.life",
+  "Subject: Confirm Your Symlex VPN Account",
+  "MIME-Version: 1.0",
+  "Content-Type: text/plain; charset=UTF-8",
+  "Content-Transfer-Encoding: quoted-printable",
+  "",
+  "Hi There,",
+  "",
+  "Thanks for creating your Symlex VPN account.",
+  "",
+  "Please verify your email to log in Symlex VPN!",
+  "",
+  " *This link expires in 24 hours.=20",
+  "",
+  " Verify Email",
+  "",
+  " Need help? We=E2=80=99r=",
+  "e here 24/7.",
+  "",
+  " support@symlexvpn.com",
+  " =C2=A0|=C2=A0",
+  " WhatsApp",
+].join("\r\n");
+await worker.email({ to: "test@mesterio.life", raw: new Response(raw4).body }, env);
+m = mails.at(-1);
+console.log("\nCASE4 subject:", m.subject);
+console.log("CASE4 body sample:", JSON.stringify(m.body.slice(0, 250)));
+console.log(m.body.includes("We’re here 24/7") ? "✅ CASE4: apostrophe decoded (E2 80 99 → ’)" : "❌ CASE4: apostrophe broken");
+console.log(m.body.includes("24 hours.") ? "✅ CASE4: soft break kept" : "❌ CASE4: content lost at soft break");
+console.log(!m.body.includes("=E2") && !m.body.includes("=99") ? "✅ CASE4: no raw QP escapes left" : "❌ CASE4: raw escape leaked");
+console.log(m.body.includes("support@symlexvpn.com") ? "✅ CASE4: footer kept" : "❌ CASE4: footer lost");

@@ -691,7 +691,8 @@ async function handleCallback(env, db, q) {
 
 // ---------- email receiving (Cloudflare Email Routing) ----------
 function decodeQuotedPrintable(s) {
-  // UTF-8 lead bytes (>=C2) همیشه decode؛ else اگر بعدش URL-safe نیاد decode، وگرنه literal (=).
+  // UTF-8 lead bytes (>=C2) همیشه decode؛ continuation byte‌های یک دنباله
+  // چندبایتی نیز همیشه decode می‌شوند (قانون URL-safe فقط خارج از دنباله).
   const bytes = [];
   let i = 0;
   const clean = s.replace(/=\r?\n/g, "");
@@ -702,9 +703,12 @@ function decodeQuotedPrintable(s) {
       const val = parseInt(pair, 16);
       const after = clean[i + 3];
       const afterUrlish = after !== undefined && /[A-Za-z0-9\-._~]/.test(after);
-      const isUtf8Lead = val >= 0xC2; // UTF-8 continuation/lead — هرگز در URL به این شکل از = شروع نمی‌شه
+      const isUtf8Lead = val >= 0xC2; // UTF-8 continuation/lead
       const isControl = val < 0x20 || val === 0x3D; // newline, tab, =3D escaped '='
-      if (isUtf8Lead || isControl || !afterUrlish) {
+      // وسط یه دنباله UTF-8 چندبایتی هستیم؟ (مثلاً E2 80 99 = ’)
+      // اگه هستیم، قانون URL-safe رو نادیده بگیر، وگرنه ' می‌شکست.
+      const inUtf8Seq = inUtf8Sequence(bytes);
+      if (isUtf8Lead || isControl || !afterUrlish || inUtf8Seq) {
         bytes.push(val); i += 3; continue;
       }
       bytes.push(c.charCodeAt(0) & 0xff); i++; // literal '=' (URL مثل token=abc123)
@@ -714,6 +718,25 @@ function decodeQuotedPrintable(s) {
     }
   }
   try { return new TextDecoder().decode(Uint8Array.from(bytes)); } catch { return clean; }
+}
+
+// آیا بایت‌های جمع‌شده تو یه دنباله UTF-8 ناتمام هستن؟
+// (مثلاً E2 80 منتظر 99 — سومین بایت از ’)
+function inUtf8Sequence(bytes) {
+  if (!bytes.length) return false;
+  let k = bytes.length - 1;
+  if (bytes[k] < 0x80) return false; // ASCII — دنباله‌ای وجود نداره
+  // برگرد به عقب تا lead byte رو پیدا کن
+  while (k >= 0 && (bytes[k] & 0xC0) === 0x80) k--;
+  if (k < 0) return false;
+  const lead = bytes[k];
+  let need = 0;
+  if ((lead & 0xE0) === 0xC0) need = 1;
+  else if ((lead & 0xF0) === 0xE0) need = 2;
+  else if ((lead & 0xF8) === 0xF0) need = 3;
+  if (!need) return false;
+  const have = bytes.length - 1 - k;
+  return have < need;
 }
 
 function htmlToText(html) {
@@ -744,8 +767,13 @@ function parseEmail(raw) {
     return m ? m[1].replace(/\r?\n[ \t]+/g, " ").trim() : "";
   };
 
+  // CTE بالاترین سطح رو از header می‌گیریم — decodeBody فقط بدنه part رو می‌بینه
+  // و هدر part با header اصلی یکی نیست (قبلاً non-multipart‌ها decode نمی‌شدن).
+  const topCTE = (getHeader("Content-Transfer-Encoding") || "");
+
   const decodeBody = (part) => {
-    const cte = (part.match(/Content-Transfer-Encoding:\s*(\S+)/i) || [])[1] || "";
+    // CTE این part رو از هدر خودش بگیر؛ اگه نبود، از CTE بالاترین سطح
+    const cte = (part.match(/Content-Transfer-Encoding:\s*(\S+)/i) || [])[1] || topCTE || "";
     // بدنه part بعد از اولین \r\n\r\n (هدر part جدا می‌شه)
     const pEnd = part.indexOf("\r\n\r\n") !== -1 ? part.indexOf("\r\n\r\n") : part.indexOf("\n\n");
     let out = pEnd !== -1 ? part.slice(pEnd).trim() : part.trim();
