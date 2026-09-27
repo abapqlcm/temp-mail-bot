@@ -10,7 +10,8 @@
 
 const DOMAINS = ["mesterio.life"];
 // آدرس عمومی ورکر — برای دکمه‌ی مینی‌اپ. از env.WORKER_BASE هم قابل تنظیمه.
-const WORKER_BASE = "https://temp-mail-bot.r65.workers.dev";
+// base URL برای لینک‌های سایت — ساب‌دامنه‌ی رسمی (workers.dev هم کار می‌کنه)
+const WORKER_BASE = "https://mail.mesterio.life";
 
 // ---------- helpers ----------
 const esc = (t) => (t || "").toString()
