@@ -503,10 +503,11 @@ function maybeRenderHtml(m) {
     } else {
       frame.srcdoc = WRAP + snip + '</body></html>';
     }
-    // متن plain رو پاک کن — HTML اصلی جاش رو می‌گیره
+    // متن plain فقط وقتی حذف می‌شه که iframe واقعاً لود شده
     const plain = body.querySelector('.plain-fallback');
-    if (plain) plain.remove();
     body.appendChild(frame);
+    // ابتدا iframe نامرئی لود می‌شه — اگه موفق بود، plain رو حذف و خودش رو نشون می‌ده
+    frame.style.display = 'none';
     // ارتفاع خودکار: بعد از load، بدون display:none اندازه بگیر
     const resize = () => {
       try {
@@ -516,10 +517,30 @@ function maybeRenderHtml(m) {
         const w = body.clientWidth;
         if (w > 0) frame.style.width = w + 'px';
         const h = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
-        frame.style.height = Math.min(Math.max(h + 16, 100), 3200) + 'px';
+        frame.style.height = Math.max(h + 16, 100) + 'px';
       } catch {}
     };
     frame.addEventListener('load', () => {
+      // اگه iframe خالی مونده (sandbox سختگیر یا WebView قدیمی)،
+      // متن plain رو نگه می‌داریم — ایمیل هرگز نصفه نمی‌مونه
+      try {
+        const doc = frame.contentDocument;
+        const txt = doc ? (doc.body && doc.body.innerText || '').trim() : '';
+        if (!txt && !doc.querySelector('img, video')) {
+          frame.remove();
+          return;
+        }
+        if (plain) plain.remove();
+        frame.style.display = '';
+        // هر تصویر که لود شد ارتفاع دوباره محاسبه شه
+        doc.querySelectorAll('img').forEach(img => {
+          img.addEventListener('load', resize, { once: true });
+          img.addEventListener('error', resize, { once: true });
+        });
+      } catch {
+        // cross-origin — باز هم سعی می‌کنیم نشون بدیم
+        try { if (plain) plain.remove(); frame.style.display = ''; } catch {}
+      }
       resize();
       // بعضی ایمیل‌ها کُند لود می‌شن — دوباره بعد از یه لحظه
       setTimeout(resize, 300);
