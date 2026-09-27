@@ -10,8 +10,7 @@
 
 const DOMAINS = ["mesterio.life"];
 // آدرس عمومی ورکر — برای دکمه‌ی مینی‌اپ. از env.WORKER_BASE هم قابل تنظیمه.
-// base URL برای لینک‌های سایت — ساب‌دامنه‌ی رسمی (workers.dev هم کار می‌کنه)
-const WORKER_BASE = "https://mail.mesterio.life";
+const WORKER_BASE = "https://temp-mail-bot.r65.workers.dev";
 
 // ---------- helpers ----------
 const esc = (t) => (t || "").toString()
@@ -53,8 +52,8 @@ function mainPanelKB(isAdmin = false) {
   ], [
     { text: "📬 My Email", callback_data: "myemail" },
   ], [
-    // سایت مستقل میل‌باکس — بدون محدودیت WebView تلگرام
-    { text: "🌐 Open Website", callback_data: "webopen" },
+    // مینی‌اپ: کل میل‌باکس تو یه صفحه‌ی گرافیکی، ایمیل‌های گرافیکی هم درست نمایش داده می‌شن
+    { text: "🖥 Mailbox App", web_app: { url: `${WORKER_BASE}/mini` } },
   ]];
   // پنل ادمین فقط با /panel — در منوی اصلی نیست
   return kb;
@@ -585,22 +584,6 @@ async function handleCallback(env, db, q) {
       return await edit(v.text, v.kb);
     }
 
-    // ساخت لینک یکبار مصرف برای ورود به سایت
-    if (data === "webopen") {
-      const token = randomToken();
-      const now = Math.floor(Date.now() / 1000);
-      // توکن یکبار مصرف، ۱۰ دقیقه اعتبار
-      await db.prepare(
-        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)"
-      ).bind(token, userId, now, now + 600).run();
-      await answer(env, q.id, "🔗 Mailbox opened");
-      // لینک مستقیم: /web/start/<token> به‌جای JSON — مرورگر مستقیم ریدایرکت می‌شه
-      return await edit(
-        `🌐 <b>Aurora Mail</b>\n\nمیل‌باکس آماده‌ست 👇`,
-        [[{ text: "📬 Open Mailbox", url: `${WORKER_BASE}/web/start/${token}` }],
-         [{ text: "🏠 Panel", callback_data: "home" }]]);
-    }
-
     if (data.startsWith("inbox:")) {
       const addr = data.slice(6);
       const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?")
@@ -1001,8 +984,6 @@ async function handleEmail(env, message) {
       const kb = [];
       if (otp) kb.push([{ text: `🔐 کپی کد: ${otp}`, callback_data: `copyotp:${otp}` }]);
       kb.push([{ text: "📥 خواندن", callback_data: `inbox:${to}` }]);
-      // دکمه‌ی سایت: یه لمس → مستقیم میل‌باکس باز می‌شه (login_url تلگرام)
-      kb.push([{ text: "📬 Open Mailbox", login_url: { url: `${WORKER_BASE}/web/start`, request_write_access: false } }]);
       await tg(env, "sendMessage", {
         chat_id: owner.user_id,
         parse_mode: "HTML",

@@ -505,7 +505,11 @@ function maybeRenderHtml(m) {
     }
     // متن plain فقط وقتی حذف می‌شه که iframe واقعاً لود شده
     const plain = body.querySelector('.plain-fallback');
-    body.appendChild(frame);
+    // wrapper برای اسکرول افقی ایمیل‌های پهن (عرض ثابت ۶۰۰px)
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:10px';
+    wrap.appendChild(frame);
+    body.appendChild(wrap);
     // ابتدا iframe نامرئی لود می‌شه — اگه موفق بود، plain رو حذف و خودش رو نشون می‌ده
     frame.style.display = 'none';
     // ارتفاع خودکار: بعد از load، بدون display:none اندازه بگیر
@@ -514,7 +518,7 @@ function maybeRenderHtml(m) {
         const doc = frame.contentDocument;
         if (!doc) return;
         // جلوگیری از سرریز افقی: عرض کانتینر رو به iframe پاس بده
-        const w = body.clientWidth;
+        const w = wrap.clientWidth;
         if (w > 0) frame.style.width = w + 'px';
         const h = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
         frame.style.height = Math.max(h + 16, 100) + 'px';
