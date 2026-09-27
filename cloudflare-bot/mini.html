@@ -495,14 +495,23 @@ function maybeRenderHtml(m) {
     const plain = body.querySelector('.plain-fallback');
     if (plain) plain.remove();
     body.appendChild(frame);
-    frame.style.display = 'none'; // تا ارتفاع تنظیم شه
-    // ارتفاع خودکار
-    frame.addEventListener('load', () => {
+    // ارتفاع خودکار: بعد از load، بدون display:none اندازه بگیر
+    const resize = () => {
       try {
-        const h = frame.contentDocument.documentElement.scrollHeight;
-        frame.style.height = Math.min(Math.max(h + 24, 120), 3000) + 'px';
-        frame.style.display = '';
-      } catch { frame.style.display = ''; }
+        const doc = frame.contentDocument;
+        if (!doc) return;
+        // جلوگیری از سرریز افقی: عرض کانتینر رو به iframe پاس بده
+        const w = body.clientWidth;
+        if (w > 0) frame.style.width = w + 'px';
+        const h = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
+        frame.style.height = Math.min(Math.max(h + 16, 100), 3200) + 'px';
+      } catch {}
+    };
+    frame.addEventListener('load', () => {
+      resize();
+      // بعضی ایمیل‌ها کُند لود می‌شن — دوباره بعد از یه لحظه
+      setTimeout(resize, 300);
+      setTimeout(resize, 900);
     });
   } catch {}
 }
