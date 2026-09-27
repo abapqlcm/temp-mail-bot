@@ -216,13 +216,13 @@
   <!-- ============ INBOX ============ -->
   <section class="screen active" id="s-inbox">
     <div class="topbar">
-      <div class="tb-title" id="inbox-title">📥 همه ایمیل‌ها</div>
+      <div class="tb-title" id="inbox-title">📥 All Inbox</div>
       <div class="tb-count" id="inbox-count"></div>
-      <button class="icon-btn" id="btn-refresh" title="به‌روزرسانی">⟳</button>
+      <button class="icon-btn" id="btn-refresh" title="Refresh">⟳</button>
     </div>
     <div class="scroll tight" id="inbox-list"></div>
     <div class="fab-fixed">
-      <button class="btn-primary" id="btn-new">✏️ ساخت آدرس جدید</button>
+      <button class="btn-primary" id="btn-new">✏️ New Address</button>
     </div>
   </section>
 
@@ -230,7 +230,7 @@
   <section class="screen" id="s-mail">
     <div class="topbar">
       <button class="icon-btn" id="mail-back">›</button>
-      <div class="tb-title">✉️ ایمیل</div>
+      <div class="tb-title">✉️ Mail</div>
       <button class="icon-btn" id="mail-copy">⧉</button>
     </div>
     <div class="mail-head" id="mail-head"></div>
@@ -240,12 +240,12 @@
   <!-- ============ ADDRESSES ============ -->
   <section class="screen" id="s-addr">
     <div class="topbar">
-      <div class="tb-title">📬 آدرس‌های من</div>
+      <div class="tb-title">📬 My Addresses</div>
       <div class="tb-count" id="addr-count"></div>
     </div>
     <div class="scroll tight" id="addr-list"></div>
     <div class="fab-fixed">
-      <button class="btn-primary" id="btn-new2">✏️ ساخت آدرس جدید</button>
+      <button class="btn-primary" id="btn-new2">✏️ New Address</button>
     </div>
   </section>
 
@@ -253,11 +253,11 @@
   <div class="tabbar">
     <button class="tab on" data-s="s-inbox">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
-      <span>اینباکس</span>
+      <span>Inbox</span>
     </button>
     <button class="tab" data-s="s-addr">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-      <span>آدرس‌ها</span>
+      <span>Addresses</span>
     </button>
   </div>
 </div>
@@ -266,14 +266,14 @@
 <div class="sheet-bg" id="sheet-bg"></div>
 <div class="sheet" id="sheet">
   <div class="grab"></div>
-  <h3>✏️ ساخت آدرس جدید</h3>
-  <input class="field" id="sheet-name" placeholder="اسم آدرس (اختیاری)" autocomplete="off" spellcheck="false">
-  <div class="domain-hint">آدرس نهایی: <b id="sheet-preview"></b></div>
-  <button class="btn-primary" id="sheet-create"> ساختن آدرس</button>
+  <h3>✏️ New Address</h3>
+  <input class="field" id="sheet-name" placeholder="Address name (optional)" autocomplete="off" spellcheck="false">
+  <div class="domain-hint">Final address: <b id="sheet-preview"></b></div>
+  <button class="btn-primary" id="sheet-create">Create Address</button>
   <div style="height:10px"></div>
-  <button class="btn-ghost" id="sheet-random">🎲 تصادفی</button>
+  <button class="btn-ghost" id="sheet-random">🎲 Random</button>
   <div style="height:8px"></div>
-  <button class="btn-ghost" id="sheet-close">انصراف</button>
+  <button class="btn-ghost" id="sheet-close">Cancel</button>
 </div>
 
 <div id="toast"></div>
@@ -335,13 +335,13 @@ function fmtTime(ts) {
   const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
   if (sameDay) return hm;
   const days = Math.floor((now - d) / 86400000);
-  if (days < 7) return ['یک‌شنبه','دوشنبه','سه‌شنبه','چهارشنبه','پنجشنبه','جمعه','شنبه'][d.getDay()];
+  if (days < 7) return d.toLocaleDateString('en-GB', { weekday: 'short' });
   return d.toLocaleDateString('fa-IR', { month: 'short', day: 'numeric' });
 }
 
 // بدنه‌ی ایمیل رو قابل خواندن می‌کنه: URL‌ها لینک، خطوط جدید حفظ
 function renderBody(text) {
-  if (!text) return '<span style="color:var(--faint)">(بدون متن)</span>';
+  if (!text) return '<span style="color:var(--faint)">(no content)</span>';
   let t = esc(text);
   // URL‌ها به لینک تبدیل (شامل mailto)
   t = t.replace(/(https?:\/\/[^\s<>"']+)/g, (m) => {
@@ -349,7 +349,7 @@ function renderBody(text) {
     return `<a href="${url}" target="_blank" rel="noopener">${url.length > 60 ? url.slice(0, 57) + '…' : url}</a>`;
   });
   t = t.replace(/([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, '<a href="mailto:$1">$1</a>');
-  return t;
+  return `<div class="plain-fallback">${t}</div>`;
 }
 
 function extractOtp(body) {
@@ -376,7 +376,7 @@ async function api(path, opts) {
     body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
   });
   if (!res.ok) {
-    let msg = 'خطای سرور (' + res.status + ')';
+    let msg = 'Server error (' + res.status + ')';
     try { const j = await res.json(); if (j && j.error) msg = j.error; } catch {}
     throw new Error(msg);
   }
@@ -400,7 +400,7 @@ async function loadInbox() {
     const data = await api('/inbox' + q);
     state.mails = data.mails || [];
     state.activeAddr = data.active || null;
-    $('#inbox-title').textContent = state.activeAddr ? '📥 ' + state.activeAddr : '📥 همه ایمیل‌ها';
+    $('#inbox-title').textContent = state.activeAddr ? '📥 ' + state.activeAddr : '📥 All Inbox';
     $('#inbox-count').textContent = state.mails.length ? state.mails.length : '';
     renderInbox();
   } catch (e) {
@@ -413,7 +413,7 @@ function renderInbox() {
   if (!state.mails.length) {
     list.innerHTML = `<div class="empty">
       <div class="ico">📬</div>
-      <p>هنوز ایمیلی دریافت نشده.<br>منتظر ایمیل‌های تأیید و کدها اینجا!</p>
+      <p>No emails yet.<br>Verification codes will show up here!</p>
     </div>`;
     return;
   }
@@ -426,7 +426,7 @@ function renderInbox() {
         <div class="avatar" style="background:${a.bg}">${esc(a.initials)}</div>
         <div class="who">
           <div class="sender">${esc(m.sender || '?')}</div>
-          <div class="subj">${esc(m.subject || '(بدون موضوع)')}</div>
+          <div class="subj">${esc(m.subject || '(no subject)')}</div>
         </div>
         <div class="time">${fmtTime(m.received_at)}</div>
       </div>
@@ -449,22 +449,23 @@ async function openMail(id) {
     const a = avatarOf(m.sender);
     const otp = extractOtp(m.body);
     $('#mail-head').innerHTML = `
-      <h2>${esc(m.subject || '(بدون موضوع)')}</h2>
+      <h2>${esc(m.subject || '(no subject)')}</h2>
       <div class="meta">
         <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px">
           <div class="avatar" style="background:${a.bg}">${esc(a.initials)}</div>
-          <div><b>${esc(m.sender || '?')}</b><br><span style="color:var(--faint)">${new Date(m.received_at * 1000).toLocaleString('fa-IR')}</span></div>
+          <div><b>${esc(m.sender || '?')}</b><br><span style="color:var(--faint)">${new Date(m.received_at * 1000).toLocaleString('en-GB')}</span></div>
         </div>
-        <div>📥 <b dir="ltr">${esc(m.address)}</b></div>
+        <div>To <b dir="ltr">${esc(m.address)}</b></div>
       </div>`;
     if (otp) {
       $('#mail-body').innerHTML = `<div class="otp-big"><code>${esc(otp)}</code>
-        <button class="copy-btn" id="otp-copy">کپی کد</button></div>` + renderBody(m.body);
-      $('#otp-copy').addEventListener('click', () => copy(otp, 'کد کپی شد'));
+        <button class="copy-btn" id="otp-copy">Copy code</button></div>` + renderBody(m.body);
+      $('#otp-copy').addEventListener('click', () => copy(otp, 'Code copied'));
     } else {
       $('#mail-body').innerHTML = renderBody(m.body);
     }
-    // اگه بدنه HTML خام باشه (گرافیکی)، داخل iframe رندر کن
+    // اگه ایمیل لایه‌ی HTML داره، دقیقاً همون چیزی که فرستنده فرستاده
+    // رو داخل iframe سندباکس‌شده رندر کن — مثل یه کلاینت واقعی
     maybeRenderHtml(m);
   } catch (e) {
     $('#mail-body').innerHTML = `<div class="empty"><div class="ico">⚠️</div><p>${esc(e.message)}</p></div>`;
@@ -472,24 +473,36 @@ async function openMail(id) {
 }
 
 function maybeRenderHtml(m) {
-  // ورکر body رو از لایه‌ی متنی می‌گیره. اگه ایمیل فقط HTML داشت، html_snippet میاد.
   if (!m.html_snippet) return;
   try {
     const frame = document.createElement('iframe');
     frame.className = 'html-mail';
     frame.sandbox = 'allow-same-origin allow-popups';
+    // فقط ایمیل‌هایی که واقعاً HTML هستن (نه متن که ضمناً رندر شده)
+    if (m.html_snippet.trim().length < 30) return;
     frame.srcdoc = `<!DOCTYPE html><html dir="ltr"><head><meta charset="UTF-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
-      <style>body{font-family:-apple-system,Segoe UI,Tahoma,sans-serif;font-size:14px;color:#111;background:#fff;margin:0;padding:10px}
-      img{max-width:100%!important;height:auto!important}a{color:#2b6cb0;word-break:break-all}
-      table{max-width:100%!important}</style></head><body>${m.html_snippet}</body></html>`;
-    $('#mail-body').appendChild(frame);
+      <style>
+        body{font-family:-apple-system,Segoe UI,Tahoma,sans-serif;font-size:14px;color:#111;background:#fff;margin:0;padding:12px}
+        img{max-width:100%!important;height:auto!important}
+        a{color:#2b6cb0;word-break:break-all}
+        table{max-width:100%!important}
+        div,td,th{max-width:100%!important}
+        *{box-sizing:border-box}
+      </style></head><body>${m.html_snippet}</body></html>`;
+    // متن plain رو پاک کن — HTML اصلی جاش رو می‌گیره
+    const body = $('#mail-body');
+    const plain = body.querySelector('.plain-fallback');
+    if (plain) plain.remove();
+    body.appendChild(frame);
+    frame.style.display = 'none'; // تا ارتفاع تنظیم شه
     // ارتفاع خودکار
     frame.addEventListener('load', () => {
       try {
         const h = frame.contentDocument.documentElement.scrollHeight;
-        frame.style.height = Math.min(Math.max(h + 24, 120), 2400) + 'px';
-      } catch {}
+        frame.style.height = Math.min(Math.max(h + 24, 120), 3000) + 'px';
+        frame.style.display = '';
+      } catch { frame.style.display = ''; }
     });
   } catch {}
 }
@@ -511,7 +524,7 @@ async function loadAddresses() {
 function renderAddresses() {
   const list = $('#addr-list');
   if (!state.addresses.length) {
-    list.innerHTML = `<div class="empty"><div class="ico">📭</div><p>هنوز آدرسی ساختی نشده.<br>از دکمه‌ی پایین بساز!</p></div>`;
+    list.innerHTML = `<div class="empty"><div class="ico">📭</div><p>No address created yet.<br>Use the button below to make one!</p></div>`;
     return;
   }
   const unread = new Set((state.mails || []).map(m => m.id));
@@ -520,12 +533,12 @@ function renderAddresses() {
     return `<div class="card addr-card">
       <div class="addr-main">
         <div class="addr-mail">${esc(a.address)}</div>
-        <div class="addr-sub">${a.label ? esc(a.label) + ' · ' : ''}${fmtTime(a.last_used || a.created_at)}${a.mail_count != null ? ' · ' + a.mail_count + ' ایمیل' : ''}</div>
+        <div class="addr-sub">${a.label ? esc(a.label) + ' · ' : ''}${fmtTime(a.last_used || a.created_at)}${a.mail_count != null ? ' · ' + a.mail_count + ' mails' : ''}</div>
       </div>
-      ${isNew ? '<span class="badge-new">جدید</span>' : ''}
+      ${isNew ? '<span class="badge-new">NEW</span>' : ''}
       <div class="addr-actions">
-        <button class="mini-btn" data-open="${esc(a.address)}">اینباکس</button>
-        <button class="mini-btn danger" data-del="${a.id}">حذف</button>
+        <button class="mini-btn" data-open="${esc(a.address)}">Inbox</button>
+        <button class="mini-btn danger" data-del="${a.id}">Delete</button>
       </div>
     </div>`;
   }).join('');
@@ -537,10 +550,10 @@ function renderAddresses() {
     }));
   list.querySelectorAll('[data-del]').forEach(b =>
     b.addEventListener('click', async () => {
-      if (!confirm('آدرس و همه ایمیل‌هایش حذف شود؟')) return;
+      if (!confirm('Delete this address and all its emails?')) return;
       try {
         await api('/address/' + b.dataset.del, { method: 'DELETE' });
-        toast('حذف شد');
+        toast('Deleted');
         loadAddresses();
         if (state.activeAddr) { state.activeAddr = null; loadInbox(); }
       } catch (e) { toast(e.message); }
@@ -549,7 +562,7 @@ function renderAddresses() {
 
 /* ---------- copy ---------- */
 function copy(text, msg) {
-  const done = () => { toast(msg || 'کپی شد'); if (TG && TG.HapticFeedback) TG.HapticFeedback.impactOccurred('light'); };
+  const done = () => { toast(msg || 'Copied'); if (TG && TG.HapticFeedback) TG.HapticFeedback.impactOccurred('light'); };
   if (TG && TG.clipboard && TG.clipboard.readText === undefined && TG.clipboard.writeText) {
     TG.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
   } else fallbackCopy(text, done);
@@ -585,11 +598,11 @@ function updatePreview() {
 async function createAddress(random) {
   const btn = $('#sheet-create');
   btn.disabled = true;
-  btn.textContent = 'در حال ساخت…';
+  btn.textContent = 'Creating…';
   try {
     const name = random ? null : ($('#sheet-name').value || '').trim();
     const data = await api('/address', { method: 'POST', body: { name } });
-    toast('آدرس ساخته شد ✅');
+    toast('Address created ✅');
     closeSheet();
     await loadAddresses();
     if (data && data.address) {
@@ -601,7 +614,7 @@ async function createAddress(random) {
     toast(e.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = ' ساختن آدرس';
+    btn.textContent = 'Create Address';
   }
 }
 
@@ -620,7 +633,7 @@ $('#sheet-name').addEventListener('input', updatePreview);
 $('#mail-back').addEventListener('click', () => { show('s-inbox'); state.openMailId = null; });
 $('#mail-copy').addEventListener('click', () => {
   const m = state.mails.find(x => String(x.id) === String(state.openMailId));
-  if (m) copy(m.body || '', 'متن ایمیل کپی شد');
+  if (m) copy(m.body || '', 'Email text copied');
 });
 $$('.tab').forEach(t => t.addEventListener('click', () => {
   const s = t.dataset.s;
