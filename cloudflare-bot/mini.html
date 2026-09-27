@@ -475,23 +475,35 @@ async function openMail(id) {
 function maybeRenderHtml(m) {
   if (!m.html_snippet) return;
   try {
+    const body = $('#mail-body');
+    const snip = m.html_snippet.trim();
+    // فقط ایمیل‌هایی که واقعاً HTML هستن (نه متن که ضمناً رندر شده)
+    if (snip.length < 30) return;
     const frame = document.createElement('iframe');
     frame.className = 'html-mail';
     frame.sandbox = 'allow-same-origin allow-popups';
-    // فقط ایمیل‌هایی که واقعاً HTML هستن (نه متن که ضمناً رندر شده)
-    if (m.html_snippet.trim().length < 30) return;
-    frame.srcdoc = `<!DOCTYPE html><html dir="ltr"><head><meta charset="UTF-8">
+    const WRAP = `<!DOCTYPE html><html dir="ltr"><head><meta charset="UTF-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       <style>
-        body{font-family:-apple-system,Segoe UI,Tahoma,sans-serif;font-size:14px;color:#111;background:#fff;margin:0;padding:12px}
+        body{font-family:-apple-system,Segoe UI,Tahoma,sans-serif;font-size:14px;color:#111;background:#fff;margin:0;padding:0}
+        body>*{padding:12px}
         img{max-width:100%!important;height:auto!important}
         a{color:#2b6cb0;word-break:break-all}
         table{max-width:100%!important}
         div,td,th{max-width:100%!important}
         *{box-sizing:border-box}
-      </style></head><body>${m.html_snippet}</body></html>`;
+      </style></head><body>`;
+    // snippet ممکنه یه سند کامل (با DOCTYPE/head/body خودش) یا یه قطعه باشه.
+    // اگه سند کامل بود، wrapper خودمون رو حذف کن و همون رو استفاده کن.
+    const isFullDoc = /^<!DOCTYPE|<html[\s>]/i.test(snip);
+    if (isFullDoc) {
+      // body داخلی رو پیدا کن — در غیر این صورت کل سند رو بذار
+      const bm = snip.match(/<body[\s\S]*<\/body>/i);
+      frame.srcdoc = WRAP + (bm ? bm[0].replace(/<\/?body[^>]*>/gi, '') : snip) + '</body></html>';
+    } else {
+      frame.srcdoc = WRAP + snip + '</body></html>';
+    }
     // متن plain رو پاک کن — HTML اصلی جاش رو می‌گیره
-    const body = $('#mail-body');
     const plain = body.querySelector('.plain-fallback');
     if (plain) plain.remove();
     body.appendChild(frame);
