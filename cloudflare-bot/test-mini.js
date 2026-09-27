@@ -57,6 +57,13 @@ async function run(mod) {
         },
         all: async () => {
           const s = sql.trim();
+          if (s.startsWith("PRAGMA table_info")) {
+            return { results: [
+              { name: "id" }, { name: "address" }, { name: "sender" },
+              { name: "subject" }, { name: "body" }, { name: "raw_snippet" },
+              { name: "received_at" },
+            ] };
+          }
           if (s.startsWith("SELECT address FROM addresses WHERE user_id")) {
             return { results: addresses.filter(a => a.user_id === b[0]).map(a => ({ address: a.address })) };
           }
@@ -64,7 +71,7 @@ async function run(mod) {
             // addresses list با mail_count — GROUP BY a.id؛ bind اول user_id
             return { results: addresses.filter(a => a.user_id === b[0]).map(a => ({ ...a, mail_count: 0, last_mail_at: 0 })) };
           }
-          if (s.startsWith("SELECT id, address, sender, subject, body, received_at")) {
+          if (s.startsWith("SELECT id, address, sender, subject, body, received_at") || s.startsWith("SELECT id, address, sender, subject, body, raw_snippet, received_at")) {
             // inbox همه: WHERE address IN (?,?,?) — bind‌ها همه آدرس هستن
             // inbox یک آدرس: WHERE address = ? — bind اول آدرسه
             if (/WHERE address IN/.test(s)) {
@@ -174,6 +181,7 @@ async function run(mod) {
     A("html_snippet saved", !!j.mails[0].html_snippet);
     A("html_snippet has script stripped", !/script/i.test(j.mails[0].html_snippet));
     A("html_snippet has h1", /Welcome!/.test(j.mails[0].html_snippet));
+    if (!/Welcome!/.test(j.mails[0].html_snippet)) console.log("   SNIPPET:", JSON.stringify(j.mails[0].html_snippet));
   }
 
   // ================= ۶. single mail =================
