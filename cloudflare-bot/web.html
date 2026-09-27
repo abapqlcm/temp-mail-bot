@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Aurora Mail</title>
+<style>
+:root{
+  --bg:#0b0b10; --surface:#14141b; --surface-2:#1c1c26; --surface-3:#262634;
+  --line:#2a2a3a; --text:#f2f2f7; --muted:#9a9aae; --faint:#5e5e74;
+  --accent:#7c5cff; --accent-2:#9d86ff; --gold:#f0b429;
+  --danger:#ff5c6c; --ok:#37d67a; --info:#4aa8ff;
+  --radius:14px; --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+  --sidebar:264px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow:hidden;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input{font:inherit;color:inherit}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--surface-3);border-radius:9px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ============ LAYOUT ============ */
+#app{height:100%;display:flex}
+/* sidebar */
+#sidebar{
+  width:var(--sidebar);flex:none;display:flex;flex-direction:column;
+  background:linear-gradient(180deg,#111119,#0c0c12);
+  border-right:1px solid var(--line);min-height:0;
+}
+.brand{display:flex;align-items:center;gap:11px;padding:18px 18px 14px}
+.brand .logo{width:38px;height:38px;border-radius:12px;flex:none;
+  background:linear-gradient(135deg,var(--accent),#4a2fd6);
+  display:grid;place-items:center;font-size:19px;box-shadow:0 6px 18px rgba(124,92,255,.35)}
+.brand h1{font-size:17px;font-weight:800;letter-spacing:.2px}
+.brand small{display:block;font-size:11px;color:var(--faint);font-weight:600;letter-spacing:.6px;text-transform:uppercase}
+.side-scroll{flex:1;overflow-y:auto;padding:6px 10px calc(16px + var(--safe-b))}
+.side-label{font-size:10.5px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--faint);padding:14px 10px 7px}
+.addr{display:flex;align-items:center;gap:10px;padding:10px 11px;border-radius:12px;cursor:pointer;width:100%;text-align:left;transition:background .14s}
+.addr:hover{background:var(--surface-2)}
+.addr.on{background:rgba(124,92,255,.16);box-shadow:inset 0 0 0 1px rgba(124,92,255,.4)}
+.addr .dot{width:8px;height:8px;border-radius:99px;background:var(--ok);flex:none}
+.addr .dot.off{background:var(--faint)}
+.addr .nm{flex:1;min-width:0}
+.addr .nm b{display:block;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr;text-align:left}
+.addr .nm span{font-size:11.5px;color:var(--muted)}
+.addr .ct{font-size:10.5px;font-weight:700;color:var(--faint);background:var(--surface-2);border-radius:99px;padding:2px 7px;flex:none}
+.side-actions{padding:10px;border-top:1px solid var(--line);display:grid;gap:7px}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;padding:11px 14px;border-radius:12px;
+  font-size:13.5px;font-weight:700;transition:transform .1s,background .14s}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:linear-gradient(135deg,var(--accent),#5b34e0);color:#fff;box-shadow:0 4px 14px rgba(124,92,255,.3)}
+.btn.ghost{background:var(--surface-2);color:var(--text)}
+.btn.danger{background:rgba(255,92,108,.14);color:var(--danger)}
+.btn.sm{padding:7px 12px;font-size:12.5px;border-radius:10px}
+.btn:disabled{opacity:.45;pointer-events:none}
+
+/* main */
+#main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+#topbar{display:flex;align-items:center;gap:12px;padding:calc(12px + var(--safe-t)) 16px 12px;border-bottom:1px solid var(--line);background:rgba(11,11,16,.86);backdrop-filter:blur(12px)}
+#topbar .tb-title{font-weight:800;font-size:16px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.icon-btn{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;background:var(--surface-2);flex:none;transition:background .14s}
+.icon-btn:hover{background:var(--surface-3)}
+.icon-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#search-wrap{padding:10px 16px 4px}
+#search{width:100%;padding:10px 14px 10px 38px;border-radius:12px;background:var(--surface);
+  border:1px solid var(--line);outline:none;font-size:14px;transition:border-color .15s}
+#search:focus{border-color:var(--accent)}
+.search-rel{position:relative}
+.search-rel svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:16px;height:16px;stroke:var(--faint);fill:none;stroke-width:2}
+#list-scroll{flex:1;overflow-y:auto;padding:8px 10px calc(24px + var(--safe-b))}
+.mail{display:flex;gap:11px;padding:12px;border-radius:var(--radius);cursor:pointer;margin-bottom:5px;
+  border:1px solid transparent;transition:background .14s,border-color .14s;position:relative}
+.mail:hover{background:var(--surface)}
+.mail.on{background:var(--surface-2);border-color:rgba(124,92,255,.45)}
+.mail.unread{background:linear-gradient(90deg,rgba(124,92,255,.10),rgba(124,92,255,0) 55%),var(--surface)}
+.mail.unread.on{background:linear-gradient(90deg,rgba(124,92,255,.16),rgba(124,92,255,.04) 55%),var(--surface-2)}
+.avatar{width:38px;height:38px;border-radius:12px;flex:none;display:grid;place-items:center;
+  font-weight:800;font-size:15px;color:#fff;letter-spacing:-.3px}
+.mail .who{flex:1;min-width:0}
+.mail .r1{display:flex;align-items:baseline;gap:8px}
+.mail .sender{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.mail.unread .sender{font-weight:800}
+.mail .time{font-size:11px;color:var(--faint);flex:none;font-weight:600}
+.mail .subj{font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+.mail.unread .subj{color:var(--text)}
+.mail .preview{font-size:12px;color:var(--faint);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45}
+.unread-dot{position:absolute;top:12px;right:12px;width:8px;height:8px;border-radius:99px;background:var(--accent)}
+.otp-chip{display:inline-flex;align-items:center;gap:5px;margin-top:6px;background:rgba(240,180,41,.13);
+  color:var(--gold);font-size:11.5px;font-weight:800;padding:3px 9px;border-radius:8px;letter-spacing:.4px}
+.otp-chip svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2.4}
+
+/* empty / loading */
+.empty{padding:56px 26px;text-align:center;color:var(--muted)}
+.empty .ico{font-size:42px;margin-bottom:12px;opacity:.7}
+.empty h3{font-size:16px;font-weight:700;color:var(--text);margin-bottom:6px}
+.empty p{font-size:13.5px;line-height:1.65;max-width:330px;margin:0 auto}
+.spin{width:26px;height:26px;border:2.5px solid var(--surface-3);border-top-color:var(--accent);
+  border-radius:50%;animation:sp .7s linear infinite;margin:44px auto}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* ============ TOAST ============ */
+#toast{position:fixed;bottom:calc(24px + var(--safe-b));left:50%;transform:translateX(-50%) translateY(16px);
+  background:var(--surface-3);color:var(--text);padding:11px 20px;border-radius:99px;font-size:13.5px;font-weight:700;
+  box-shadow:0 10px 30px rgba(0,0,0,.5);z-index:99;opacity:0;pointer-events:none;transition:all .22s;max-width:80vw;
+  text-align:center;border:1px solid var(--line)}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ============ READER ============ */
+#reader{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
+#reader-head{display:flex;align-items:center;gap:10px;padding:calc(12px + var(--safe-t)) 14px 12px;border-bottom:1px solid var(--line)}
+#reader-head h2{flex:1;font-size:16px;font-weight:800;line-height:1.35;min-width:0}
+.reader-meta{padding:12px 16px 4px;font-size:12.5px;color:var(--muted);line-height:1.75;border-bottom:1px solid var(--line)}
+.reader-meta b{color:var(--text);font-weight:700}
+.reader-meta .from-line{display:flex;align-items:center;gap:9px;margin-bottom:2px}
+.reader-meta .from-line .avatar{width:32px;height:32px;border-radius:10px;font-size:13px}
+#reader-scroll{flex:1;overflow-y:auto;padding:14px 16px calc(30px + var(--safe-b))}
+#reader-body{font-size:14.5px;line-height:1.75;color:var(--text);white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+#reader-body a{color:var(--info);word-break:break-all}
+.html-mail{border:0;width:100%;min-height:200px;border-radius:10px;background:#fff}
+.reader-nav{display:flex;gap:8px;padding:10px 14px calc(10px + var(--safe-b));border-top:1px solid var(--line);background:var(--surface)}
+.reader-nav .btn{flex:1}
+.otp-big{display:flex;align-items:center;gap:12px;background:rgba(240,180,41,.1);border:1px dashed rgba(240,180,41,.4);
+  border-radius:14px;padding:14px 16px;margin-bottom:14px}
+.otp-big code{font-size:26px;font-weight:800;letter-spacing:5px;color:var(--gold);flex:1}
+
+/* ============ MOBILE ============ */
+#mobile-bar{display:none}
+@media (max-width:860px){
+  #sidebar{position:fixed;left:0;top:0;bottom:0;z-index:60;transform:translateX(-105%);
+    transition:transform .26s cubic-bezier(.4,0,.2,1);box-shadow:14px 0 40px rgba(0,0,0,.5);width:min(var(--sidebar),82vw)}
+  body.side-open #sidebar{transform:none}
+  #side-scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:55;opacity:0;pointer-events:none;transition:opacity .2s}
+  body.side-open #side-scrim{opacity:1;pointer-events:auto}
+  #mobile-bar{display:flex;align-items:center;gap:12px;padding:calc(12px + var(--safe-t)) 12px 10px}
+  #reader-head{padding-top:8px}
+}
+@media (min-width:861px){ #reader{display:flex} }
+/* desktop: two-pane */
+@media (min-width:861px){
+  #pane{flex:1;display:flex;min-height:0}
+  #list-col{width:390px;flex:none;display:flex;flex-direction:column;border-right:1px solid var(--line);min-height:0}
+  #reader{flex:1}
+  body.no-reader #reader{display:none}
+}
+@media (max-width:860px){
+  #pane{flex:1;display:flex;min-height:0}
+  #list-col{flex:1;display:flex;flex-direction:column;min-height:0}
+  body.reader-open #list-col{display:none}
+  body:not(.reader-open) #reader{display:none}
+}
+</style>
+</head>
+<body>
+<div id="side-scrim"></div>
+<div id="app">
+  <!-- ============ SIDEBAR ============ -->
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="logo">🐴</div>
+      <div><h1>Aurora Mail</h1><small>Private Inbox</small></div>
+    </div>
+    <div class="side-scroll">
+      <div class="side-label">My Addresses</div>
+      <div id="addr-list"><div class="spin"></div></div>
+    </div>
+    <div class="side-actions">
+      <button class="btn primary" id="btn-new">
+        <svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.4;stroke-linecap:round"><path d="M12 5v14M5 12h14"/></svg>
+        New Address
+      </button>
+      <button class="btn ghost" id="btn-logout">
+        <svg viewBox="0 0 24 24" style="width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+        Log out
+      </button>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div id="main">
+    <div id="mobile-bar">
+      <button class="icon-btn" id="btn-side" aria-label="menu">
+        <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <div style="font-weight:800;font-size:16px;flex:1">Aurora Mail</div>
+      <button class="icon-btn" id="btn-new-m" aria-label="new">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+
+    <div id="pane">
+      <!-- list column -->
+      <div id="list-col">
+        <div id="topbar">
+          <button class="icon-btn" id="btn-refresh" aria-label="refresh">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+          </button>
+          <div class="tb-title" id="tb-title">Inbox</div>
+          <button class="icon-btn" id="btn-side-d" aria-label="addresses">
+            <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/></svg>
+          </button>
+        </div>
+        <div id="search-wrap">
+          <div class="search-rel">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input id="search" placeholder="Search inbox…" autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+        <div id="list-scroll"><div class="spin"></div></div>
+      </div>
+
+      <!-- reader -->
+      <div id="reader">
+        <div id="reader-head">
+          <button class="icon-btn" id="btn-back" aria-label="back">
+            <svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          </button>
+          <h2 id="r-subj">—</h2>
+          <button class="icon-btn" id="btn-del" aria-label="delete">
+            <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+          </button>
+        </div>
+        <div class="reader-meta" id="r-meta"></div>
+        <div id="reader-scroll"><div id="reader-body" class="empty"><div class="ico">✉️</div><p>Select an email to read it.</p></div></div>
+        <div class="reader-nav">
+          <button class="btn ghost sm" id="btn-prev">← Prev</button>
+          <button class="btn ghost sm" id="btn-next">Next →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ==================== STATE ==================== */
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const state = {
+  addresses: [], active: null, mails: [], openIdx: -1, q: '',
+  user: { id: 0, name: '' }, domain: 'mesterio.life',
+};
+
+/* ==================== UTIL ==================== */
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function avatarColor(s){
+  let h = 0; for (const ch of String(s||'?')) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h} 62% 42%)`;
+}
+function initials(s){ const t = String(s||'?').replace(/<[^>]*>/g,'').trim(); return t.charAt(0).toUpperCase(); }
+function prettySender(s){
+  let t = String(s||'?');
+  const m = t.match(/^"?([^"<]+?)"?\s*</);
+  return m ? m[1].trim() : t.replace(/<[^>]*>/g,'').trim();
+}
+function fmtTime(ts){
+  const d = new Date(ts*1000), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const opts = sameDay ? {hour:'2-digit',minute:'2-digit'} : {month:'short',day:'numeric'};
+  return d.toLocaleString('en-GB', opts).replace(',', '');
+}
+function fmtFull(ts){ return new Date(ts*1000).toLocaleString('en-GB', {dateStyle:'medium', timeStyle:'short'}); }
+function toast(msg){
+  let t = $('#toast');
+  if (!t){ t = document.createElement('div'); t.id='toast'; document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 1900);
+}
+function copy(text, msg){
+  navigator.clipboard && navigator.clipboard.writeText(text).then(() => toast(msg || 'Copied')).catch(() => toast('Copy failed'));
+}
+function extractOtp(text){
+  if (!text) return null;
+  const t = String(text);
+  const pats = [
+    /\b(\d{6})\b/, /\b(\d{4})\b/, /code[:\s]+([A-Z0-9]{4,8})/i,
+    /کد[:\s]*([0-9]{4,8})/, /رمز[:\s]*([0-9]{4,8})/,
+  ];
+  for (const p of pats){ const m = t.match(p); if (m) return m[1]; }
+  return null;
+}
+
+/* ==================== API ==================== */
+async function api(path, opts){
+  const r = await fetch('/web/api' + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+  let d = null;
+  try { d = await r.json(); } catch {}
+  if (!r.ok) throw new Error((d && d.error) || ('HTTP ' + r.status));
+  return d;
+}
+
+/* ==================== SIDEBAR ==================== */
+async function loadAddresses(){
+  const list = $('#addr-list');
+  try {
+    const d = await api('/addresses');
+    state.addresses = d.addresses || [];
+    state.active = d.active || (state.addresses[0] && state.addresses[0].address) || null;
+    state.domain = d.domain || state.domain;
+    state.user = d.user || state.user;
+    if (!state.addresses.length){
+      list.innerHTML = `<div class="empty" style="padding:26px 10px"><div class="ico">📬</div>
+        <p>No addresses yet. Create your first inbox.</p></div>`;
+      return;
+    }
+    list.innerHTML = state.addresses.map(a => `
+      <button class="addr ${a.address===state.active?'on':''}" data-addr="${esc(a.address)}">
+        <span class="dot ${a.mail_count?'':'off'}"></span>
+        <span class="nm"><b>${esc(a.address)}</b><span>${a.mail_count||0} email${(a.mail_count||0)===1?'':'s'}</span></span>
+        <span class="ct">${a.unread||0||''}</span>
+      </button>`).join('');
+    list.querySelectorAll('.addr').forEach(b => b.addEventListener('click', () => {
+      state.active = b.dataset.addr; closeSide(); loadAddresses().then(loadInbox);
+    }));
+  } catch (e){
+    list.innerHTML = `<div class="empty"><div class="ico">⚠️</div><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+/* ==================== INBOX LIST ==================== */
+function filtered(){
+  const q = state.q.trim().toLowerCase();
+  if (!q) return state.mails;
+  return state.mails.filter(m =>
+    (m.subject||'').toLowerCase().includes(q) ||
+    prettySender(m.sender||'').toLowerCase().includes(q) ||
+    (m.body||'').toLowerCase().includes(q));
+}
+async function loadInbox(){
+  const sc = $('#list-scroll');
+  sc.innerHTML = '<div class="spin"></div>';
+  try {
+    if (!state.active){ sc.innerHTML = `<div class="empty"><div class="ico">📬</div><h3>No address</h3><p>Create an inbox from the sidebar.</p></div>`; return; }
+    const d = await api('/inbox?addr=' + encodeURIComponent(state.active));
+    state.mails = d.mails || [];
+    renderList();
+  } catch (e){
+    sc.innerHTML = `<div class="empty"><div class="ico">⚠️</div><p>${esc(e.message)}</p></div>`;
+  }
+}
+function renderList(){
+  const sc = $('#list-scroll');
+  const items = filtered();
+  $('#tb-title').textContent = state.active || 'Inbox';
+  if (!items.length){
+    sc.innerHTML = state.q
+      ? `<div class="empty"><div class="ico">🔍</div><h3>No matches</h3><p>Nothing matches “${esc(state.q)}”.</p></div>`
+      : `<div class="empty"><div class="ico">📭</div><h3>Inbox is empty</h3><p>Emails to <b>${esc(state.active||'')}</b> will appear here instantly.</p></div>`;
+    return;
+  }
+  sc.innerHTML = items.map((m, i) => {
+    const otp = extractOtp(m.body);
+    return `<div class="mail ${m.read?'':'unread'} ${i===state.openIdx?'on':''}" data-i="${i}">
+      ${m.read?'':'<span class="unread-dot"></span>'}
+      <div class="avatar" style="background:${avatarColor(m.sender)}">${esc(initials(prettySender(m.sender)))}</div>
+      <div class="who">
+        <div class="r1"><span class="sender">${esc(prettySender(m.sender))}</span><span class="time">${fmtTime(m.received_at)}</span></div>
+        <div class="subj">${esc(m.subject || '(no subject)')}</div>
+        <div class="preview">${esc((m.body||'').replace(/\s+/g,' ').slice(0,140))}</div>
+        ${otp?`<span class="otp-chip"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>${esc(otp)}</span>`:''}
+      </div>
+    </div>`;
+  }).join('');
+  sc.querySelectorAll('.mail').forEach(el => el.addEventListener('click', () => openMail(+el.dataset.i)));
+}
+
+/* ==================== READER ==================== */
+function renderBody(text){
+  if (!text) return '<span style="color:var(--faint)">(no content)</span>';
+  let t = esc(text);
+  t = t.replace(/(https?:\/\/[^\s<>"']+|mailto:[^\s<>"']+)/g, m => `<a href="${esc(m)}" target="_blank" rel="noopener">${esc(m)}</a>`);
+  return t;
+}
+function openMail(i){
+  const items = filtered();
+  const m = items[i];
+  if (!m) return;
+  state.openIdx = i;
+  document.body.classList.add('reader-open');
+  $('#r-subj').textContent = m.subject || '(no subject)';
+  $('#r-meta').innerHTML = `<div class="from-line">
+      <div class="avatar" style="background:${avatarColor(m.sender)}">${esc(initials(prettySender(m.sender)))}</div>
+      <div><b>${esc(prettySender(m.sender))}</b><br><span style="font-size:11.5px;color:var(--faint)">${esc((m.sender||'').replace(/^.*<([^>]*)>.*$/,'$1'))}</span></div>
+    </div>
+    <div>To <b dir="ltr">${esc(m.address)}</b></div>
+    <div style="margin-top:2px">${fmtFull(m.received_at)}</div>`;
+  const body = $('#reader-body');
+  const otp = extractOtp(m.body);
+  body.innerHTML = otp
+    ? `<div class="otp-big"><code>${esc(otp)}</code>
+        <button class="btn ghost sm" id="otp-copy">Copy</button></div>` + renderBody(m.body)
+    : renderBody(m.body);
+  const oc = $('#otp-copy');
+  if (oc) oc.addEventListener('click', () => copy(otp, 'Code copied'));
+  maybeRenderHtml(m);
+  renderList();
+  $('#reader-scroll').scrollTop = 0;
+  if (!m.read) markRead(m);
+}
+function maybeRenderHtml(m){
+  if (!m.html_snippet) return;
+  try {
+    const body = $('#reader-body');
+    const snip = m.html_snippet.trim();
+    if (snip.length < 30) return;
+    const frame = document.createElement('iframe');
+    frame.className = 'html-mail';
+    frame.sandbox = 'allow-same-origin allow-popups';
+    const WRAP = `<!DOCTYPE html><html dir="ltr"><head><meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <style>
+        html,body{margin:0;padding:0}
+        body{font-family:-apple-system,Segoe UI,Tahoma,sans-serif;font-size:14px;color:#111;background:#fff}
+        body>*{padding:12px}
+        img{max-width:100%!important;height:auto!important}
+        a{color:#2b6cb0;word-break:break-all}
+        table{max-width:100%!important}
+        *{box-sizing:border-box}
+      </style></head><body>`;
+    const isFullDoc = /^<!DOCTYPE|<html[\s>]/i.test(snip);
+    if (isFullDoc){
+      const bm = snip.match(/<body[\s\S]*<\/body>/i);
+      frame.srcdoc = WRAP + (bm ? bm[0].replace(/<\/?body[^>]*>/gi, '') : snip) + '</body></html>';
+    } else {
+      frame.srcdoc = WRAP + snip + '</body></html>';
+    }
+    const plain = body.querySelector('.plain-fallback');
+    // wrapper برای اسکرول افقی ایمیل‌های پهن (عرض ثابت ۶۰۰px)
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:10px';
+    wrap.appendChild(frame);
+    body.appendChild(wrap);
+    frame.style.display = 'none';
+    const resize = () => {
+      try {
+        const doc = frame.contentDocument;
+        if (!doc) return;
+        // عرض کانتینر — iframe نباید از صفحه بیرون بزنه
+        const w = wrap.clientWidth;
+        if (w > 0) frame.style.width = w + 'px';
+        const h = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
+        frame.style.height = Math.max(h + 16, 100) + 'px';
+      } catch {}
+    };
+    frame.addEventListener('load', () => {
+      try {
+        const doc = frame.contentDocument;
+        const txt = doc ? (doc.body && doc.body.innerText || '').trim() : '';
+        if (!txt && !doc.querySelector('img, video')){ frame.remove(); return; }
+        if (plain) plain.remove();
+        frame.style.display = '';
+        doc.querySelectorAll('img').forEach(img => {
+          img.addEventListener('load', resize, { once: true });
+          img.addEventListener('error', resize, { once: true });
+        });
+      } catch { try { if (plain) plain.remove(); frame.style.display = ''; } catch {} }
+      resize();
+      setTimeout(resize, 300);
+      setTimeout(resize, 900);
+    });
+  } catch {}
+}
+async function markRead(m){
+  m.read = 1;
+  try { await api('/read/' + m.id, { method: 'POST' }); } catch {}
+}
+function navMail(delta){
+  const items = filtered();
+  const n = state.openIdx + delta;
+  if (n >= 0 && n < items.length) openMail(n);
+}
+async function deleteMail(){
+  const items = filtered();
+  const m = items[state.openIdx];
+  if (!m) return;
+  try {
+    await api('/mail/' + m.id, { method: 'DELETE' });
+    state.mails = state.mails.filter(x => x.id !== m.id);
+    state.openIdx = -1;
+    document.body.classList.remove('reader-open');
+    $('#reader-body').innerHTML = '<div class="empty"><div class="ico">🗑️</div><p>Email deleted.</p></div>';
+    renderList();
+    toast('Deleted');
+  } catch (e){ toast(e.message); }
+}
+
+/* ==================== NEW ADDRESS SHEET ==================== */
+function newAddress(){
+  const name = prompt('Choose a name for your new address (leave empty for random):');
+  if (name === null) return;
+  api('/address', { method: 'POST', body: JSON.stringify({ name: name.trim(), domain: state.domain }) })
+    .then(d => { toast('Address created'); state.active = d.address; loadAddresses().then(loadInbox); })
+    .catch(e => toast(e.message));
+}
+
+/* ==================== SIDEBAR (mobile) ==================== */
+function openSide(){ document.body.classList.add('side-open'); }
+function closeSide(){ document.body.classList.remove('side-open'); }
+
+/* ==================== BOOT ==================== */
+$('#btn-refresh').addEventListener('click', () => { loadInbox(); toast('Synced'); });
+$('#btn-side').addEventListener('click', openSide);
+$('#btn-side-d').addEventListener('click', openSide);
+$('#btn-new').addEventListener('click', newAddress);
+$('#btn-new-m').addEventListener('click', newAddress);
+$('#btn-back').addEventListener('click', () => { document.body.classList.remove('reader-open'); state.openIdx = -1; renderList(); });
+$('#btn-prev').addEventListener('click', () => navMail(-1));
+$('#btn-next').addEventListener('click', () => navMail(1));
+$('#btn-del').addEventListener('click', deleteMail);
+$('#btn-logout').addEventListener('click', () => {
+  api('/logout', { method: 'POST' }).then(() => location.href = '/web').catch(() => location.href = '/web');
+});
+$('#side-scrim').addEventListener('click', closeSide);
+let sT;
+$('#search').addEventListener('input', e => { state.q = e.target.value; clearTimeout(sT); sT = setTimeout(renderList, 140); });
+
+(async function boot(){
+  try {
+    const meta = await api('/meta');
+    state.domain = meta.domain || state.domain;
+    state.user = meta.user || state.user;
+  } catch {}
+  await loadAddresses();
+  await loadInbox();
+  // refresh inbox when tab becomes visible again
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.active) loadInbox(); });
+})();
+</script>
+</body>
+</html>

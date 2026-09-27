@@ -52,8 +52,8 @@ function mainPanelKB(isAdmin = false) {
   ], [
     { text: "📬 My Email", callback_data: "myemail" },
   ], [
-    // مینی‌اپ: کل میل‌باکس تو یه صفحه‌ی گرافیکی، ایمیل‌های گرافیکی هم درست نمایش داده می‌شن
-    { text: "🖥 Mailbox App", web_app: { url: `${WORKER_BASE}/mini` } },
+    // سایت مستقل میل‌باکس — بدون محدودیت WebView تلگرام
+    { text: "🌐 Open Website", callback_data: "webopen" },
   ]];
   // پنل ادمین فقط با /panel — در منوی اصلی نیست
   return kb;
@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS mails (
 );
 CREATE INDEX IF NOT EXISTS idx_addr_user ON addresses(user_id);
 CREATE INDEX IF NOT EXISTS idx_mails_addr ON mails(address, received_at DESC);
+CREATE TABLE IF NOT EXISTS sessions (
+  token TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_user ON sessions(user_id);
 `;
 
 // مهاجرت + پاکسازی — یک‌بار به ازای هر isolate، batch با prepared statements
@@ -110,6 +117,7 @@ const INIT_SQLS = INIT_SQL.split(";").map(s => s.trim()).filter(Boolean);
 const ALTER_SQLS = [
   "ALTER TABLE addresses ADD COLUMN last_seen INTEGER DEFAULT 0",
   "ALTER TABLE mails ADD COLUMN html_raw TEXT DEFAULT ''",
+  "ALTER TABLE mails ADD COLUMN is_read INTEGER DEFAULT 0",
 ];
 async function initDB(db) {
   if (!dbReady) {
@@ -574,6 +582,22 @@ async function handleCallback(env, db, q) {
     if (data === "myemail") {
       const v = await myEmailView(db, userId);
       return await edit(v.text, v.kb);
+    }
+
+    // ساخت لینک یکبار مصرف برای ورود به سایت
+    if (data === "webopen") {
+      const token = randomToken();
+      const now = Math.floor(Date.now() / 1000);
+      // توکن یکبار مصرف، ۱۰ دقیقه اعتبار
+      await db.prepare(
+        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)"
+      ).bind(token, userId, now, now + 600).run();
+      await answer(env, q.id, "🔗 Link ready");
+      return await edit(
+        `🌐 <b>Aurora Mail — Website</b>\n\nلینک زیر رو باز کن تا وارد میل‌باکس بشی:\n\n<code>${WORKER_BASE}/web/api/start/${token}</code>\n\n` +
+        `🔒 این لینک فقط یه بار کار می‌کنه و ۱۰ دقیقه اعتبار داره.\n` +
+        `بعد از ورود، مرورگرتون به‌خاطر میاد و دیگه نیاز به لینک نیست.`,
+        [[{ text: "🏠 Panel", callback_data: "home" }]]);
     }
 
     if (data.startsWith("inbox:")) {
@@ -1045,6 +1069,227 @@ async function getMiniHtml(env) {
   return _miniHtmlCache;
 }
 
+// ---------- web app: HTML ----------
+let _webHtmlCache = null;
+async function getWebHtml(env) {
+  if (_webHtmlCache) return _webHtmlCache;
+  try { _webHtmlCache = (await import("./web_html.js")).default; return _webHtmlCache; } catch {}
+  if (env.WEB_HTML) { _webHtmlCache = env.WEB_HTML; return _webHtmlCache; }
+  _webHtmlCache = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+    <body style="background:#0d0d10;color:#f2f2f5;font-family:sans-serif;text-align:center;padding:60px 20px">
+    <h2>📬 Aurora Mail</h2><p style="color:#8e8e9c">web_html.js not uploaded.</p></body></html>`;
+  return _webHtmlCache;
+}
+
+// ---------- web app: session helpers ----------
+const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 روز
+function randomToken() {
+  const a = new Uint8Array(32);
+  crypto.getRandomValues(a);
+  return Array.from(a, b => b.toString(16).padStart(2, "0")).join("");
+}
+async function getSessionUser(db, request) {
+  // کوکی session رو می‌خونه؛ user_id رو برمی‌گردونه
+  const ck = (request.headers.get("Cookie") || "");
+  const m = ck.match(/(?:^|;\s*)aurora_session=([a-f0-9]{64})/);
+  if (!m) return null;
+  const row = await db.prepare(
+    "SELECT user_id FROM sessions WHERE token = ? AND expires_at > ?"
+  ).bind(m[1], Math.floor(Date.now() / 1000)).first();
+  return row ? row.user_id : null;
+}
+function sessionCookie(token, maxAge) {
+  return `aurora_session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+// ---------- web app: start (browser entry) ----------
+async function handleWebStart(request, env, url) {
+  const db = env.DB;
+  const token = url.pathname.slice("/web/start/".length);
+  try { await initDB(db); } catch {}
+  const row = await db.prepare(
+    "SELECT user_id FROM sessions WHERE token = ? AND expires_at > ?"
+  ).bind(token, Math.floor(Date.now() / 1000)).first();
+  if (!row) {
+    const html = await getWebHtml(env);
+    return new Response(html.replace("</body>", `<script>
+      document.body.insertAdjacentHTML('beforeend',
+        '<div style="position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:999;display:grid;place-items:center;padding:30px">\\
+        <div style="text-align:center;color:#f2f2f7;font-family:sans-serif">\\
+        <div style="font-size:40px">🔒</div>\\
+        <h3 style="margin:12px 0 8px">Link expired</h3>\\
+        <p style="color:#9a9aae;font-size:14px;line-height:1.6">Open the bot and press “🌐 Open Website” to get a fresh link.</p></div></div>');
+    </script></body>`), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  }
+  // توکن یکبار مصرف
+  await db.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+  const st = randomToken();
+  const now = Math.floor(Date.now() / 1000);
+  await db.prepare(
+    "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)"
+  ).bind(st, row.user_id, now, now + SESSION_MAX_AGE).run();
+  return new Response(null, {
+    status: 302,
+    headers: { Location: "/web", "Set-Cookie": sessionCookie(st, SESSION_MAX_AGE) },
+  });
+}
+
+// ---------- web app: API ----------
+async function handleWebApi(request, env, url) {
+  const db = env.DB;
+  const path = url.pathname.replace(/^\/web\/api/, "");
+  const method = request.method;
+
+  // ---- login via one-time token (از ربات) ----
+  // GET /web/api/start/<token>  →  ست می‌کنه cookie و ریدایرکت به /web
+  if (path.startsWith("/start/") && method === "GET") {
+    const token = path.slice("/start/".length);
+    const row = await db.prepare(
+      "SELECT user_id FROM sessions WHERE token = ? AND expires_at > ?"
+    ).bind(token, Math.floor(Date.now() / 1000)).first();
+    if (!row) return json({ error: "Invalid or expired link" }, 401);
+    // توکن یکبار مصرفه — بعد از استفاده پاک می‌شه
+    await db.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+    // session بلندمدت
+    const st = randomToken();
+    const now = Math.floor(Date.now() / 1000);
+    await db.prepare(
+      "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)"
+    ).bind(st, row.user_id, now, now + SESSION_MAX_AGE).run();
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Set-Cookie": sessionCookie(st, SESSION_MAX_AGE),
+      },
+    });
+  }
+
+  // ---- بقیه‌ی مسیرها نیاز به session دارند ----
+  const userId = await getSessionUser(db, request);
+  if (!userId) return json({ error: "Not authenticated" }, 401);
+
+  try { await initDB(db); } catch {}
+
+  // ---- meta ----
+  if (path === "/meta") {
+    let nm = "";
+    try {
+      const u = await db.prepare("SELECT first_name FROM users WHERE user_id = ?").bind(userId).first();
+      if (u) nm = u.first_name || "";
+    } catch {}
+    return json({
+      domain: env.MAIL_DOMAIN || (DOMAINS[0] || ""),
+      user: { id: userId, name: nm },
+    });
+  }
+
+  // ---- addresses ----
+  if (path === "/addresses" && method === "GET") {
+    const rows = await db.prepare(
+      `SELECT a.id, a.address, a.label, a.created_at, a.last_used,
+              COUNT(m.id) AS mail_count,
+              SUM(CASE WHEN m.is_read = 0 OR m.is_read IS NULL THEN 1 ELSE 0 END) AS unread,
+              MAX(m.received_at) AS last_mail_at
+       FROM addresses a LEFT JOIN mails m ON m.address = a.address
+       WHERE a.user_id = ? GROUP BY a.id ORDER BY a.last_used DESC`
+    ).bind(userId).all();
+    const list = (rows.results || []).map(r => ({
+      id: r.id, address: r.address, label: r.label || "",
+      created_at: r.created_at, last_used: r.last_used || 0,
+      mail_count: r.mail_count || 0, unread: r.unread || 0,
+      last_mail_at: r.last_mail_at || 0,
+    }));
+    return json({ addresses: list, active: list.length ? list[0].address : null, domain: env.MAIL_DOMAIN || (DOMAINS[0] || "") });
+  }
+
+  // ---- inbox ----
+  if (path === "/inbox" && method === "GET") {
+    const addr = url.searchParams.get("addr");
+    if (!addr) return json({ error: "addr required" }, 400);
+    const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?").bind(userId, addr).first();
+    if (!own) return json({ error: "Not your address" }, 403);
+    await db.prepare("UPDATE addresses SET last_used = ? WHERE address = ?")
+      .bind(Math.floor(Date.now() / 1000), addr).run();
+    const rows = await db.prepare(
+      "SELECT id, address, sender, subject, body, raw_snippet, is_read, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT 60"
+    ).bind(addr).all();
+    const mails = (rows.results || []).map(m => ({
+      id: m.id, address: m.address, sender: prettySender(m.sender),
+      subject: m.subject || "", body: m.body || "",
+      read: m.is_read ? 1 : 0,
+      html_snippet: m.raw_snippet || null,
+      received_at: m.received_at,
+    }));
+    return json({ mails, active: addr });
+  }
+
+  // ---- single mail ----
+  if (path.startsWith("/mail/") && method === "GET") {
+    const id = parseInt(path.split("/")[2]);
+    if (!id) return json({ error: "Invalid id" }, 400);
+    const m = await db.prepare(
+      "SELECT id, address, sender, subject, body, raw_snippet, is_read, received_at FROM mails WHERE id = ?"
+    ).bind(id).first();
+    if (!m) return json({ error: "Not found" }, 404);
+    const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?").bind(userId, m.address).first();
+    if (!own) return json({ error: "Forbidden" }, 403);
+    return json({
+      id: m.id, address: m.address, sender: prettySender(m.sender),
+      subject: m.subject || "", body: m.body || "",
+      read: m.is_read ? 1 : 0, html_snippet: m.raw_snippet || null,
+      received_at: m.received_at,
+    });
+  }
+
+  // ---- mark read ----
+  if (path.startsWith("/read/") && method === "POST") {
+    const id = parseInt(path.split("/")[2]);
+    if (!id) return json({ error: "Invalid id" }, 400);
+    const m = await db.prepare("SELECT address FROM mails WHERE id = ?").bind(id).first();
+    if (!m) return json({ error: "Not found" }, 404);
+    const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?").bind(userId, m.address).first();
+    if (!own) return json({ error: "Forbidden" }, 403);
+    await db.prepare("UPDATE mails SET is_read = 1 WHERE id = ?").bind(id).run();
+    return json({ ok: true });
+  }
+
+  // ---- delete mail ----
+  if (path.startsWith("/mail/") && method === "DELETE") {
+    const id = parseInt(path.split("/")[2]);
+    if (!id) return json({ error: "Invalid id" }, 400);
+    const m = await db.prepare("SELECT address FROM mails WHERE id = ?").bind(id).first();
+    if (!m) return json({ error: "Not found" }, 404);
+    const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?").bind(userId, m.address).first();
+    if (!own) return json({ error: "Forbidden" }, 403);
+    await db.prepare("DELETE FROM mails WHERE id = ?").bind(id).run();
+    return json({ ok: true });
+  }
+
+  // ---- create address ----
+  if (path === "/address" && method === "POST") {
+    let b = {}; try { b = await request.json(); } catch {}
+    const domain = (b.domain || env.MAIL_DOMAIN || DOMAINS[0]).toLowerCase();
+    const name = (b.name || "").toLowerCase().replace(/[^a-z0-9._-]/g, "");
+    const res = await createAddress(env, db, userId, name, domain);
+    if (res.error) return json({ error: res.error }, 400);
+    return json({ address: res.address });
+  }
+
+  // ---- logout ----
+  if (path === "/logout" && method === "POST") {
+    const ck = (request.headers.get("Cookie") || "");
+    const m = ck.match(/(?:^|;\s*)aurora_session=([a-f0-9]{64})/);
+    if (m) try { await db.prepare("DELETE FROM sessions WHERE token = ?").bind(m[1]).run(); } catch {}
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Set-Cookie": sessionCookie("", 0) },
+    });
+  }
+
+  return json({ error: "Not found" }, 404);
+}
+
 // ---------- mini app: API ----------
 async function handleMiniApi(request, env, url) {
   const db = env.DB;
@@ -1189,6 +1434,22 @@ export default {
       envAdmins = env.ADMIN_IDS || "";
 
     if (url.pathname === "/health") return new Response("ok");
+
+    // ================= WEB APP =================
+    // Aurora Mail — سایت مستقل میل‌باکس. هیچ محدودیتی نداره:
+    // iframe سندباکس، تصاویر خارجی، کوکی session، همه چیز.
+    if (url.pathname === "/web" || url.pathname === "/web/") {
+      const html = await getWebHtml(env);
+      return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" } });
+    }
+    if (url.pathname.startsWith("/web/api/")) {
+      envAdmins = env.ADMIN_IDS || "";
+      return handleWebApi(request, env, url);
+    }
+    // ورود مستقیم از مرورگر: /web/start/<token> → کوکی ست می‌کنه و ریدایرکت به /web
+    if (url.pathname.startsWith("/web/start/")) {
+      return handleWebStart(request, env, url);
+    }
 
     // ================= MINI APP =================
     // Aurora Mail — Telegram Mini App. فایل HTML استاتیک سرو می‌شه و
