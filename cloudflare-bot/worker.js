@@ -1077,7 +1077,7 @@ async function handleMiniApi(request, env, url) {
         const own = await db.prepare("SELECT 1 FROM addresses WHERE user_id = ? AND address = ?").bind(user.id, addr).first();
         if (!own) return json({ error: "آدرس متعلق به شما نیست" }, 403);
         rows = await db.prepare(
-          "SELECT id, address, sender, subject, body, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT 40"
+          "SELECT id, address, sender, subject, body, raw_snippet, received_at FROM mails WHERE address = ? ORDER BY received_at DESC, id DESC LIMIT 40"
         ).bind(addr).all();
       } else {
         const addrs = await db.prepare("SELECT address FROM addresses WHERE user_id = ?").bind(user.id).all();
@@ -1085,7 +1085,7 @@ async function handleMiniApi(request, env, url) {
         const all = list(addrs);
         if (!all.length) return json({ mails: [], active: null });
         rows = await db.prepare(
-          `SELECT id, address, sender, subject, body, received_at FROM mails
+          `SELECT id, address, sender, subject, body, raw_snippet, received_at FROM mails
            WHERE address IN (${all.map(() => "?").join(",")})
            ORDER BY received_at DESC, id DESC LIMIT 40`
         ).bind(...all).all();
