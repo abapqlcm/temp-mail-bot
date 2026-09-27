@@ -593,12 +593,12 @@ async function handleCallback(env, db, q) {
       await db.prepare(
         "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)"
       ).bind(token, userId, now, now + 600).run();
-      await answer(env, q.id, "🔗 Link ready");
+      await answer(env, q.id, "🔗 Mailbox opened");
+      // لینک مستقیم: /web/start/<token> به‌جای JSON — مرورگر مستقیم ریدایرکت می‌شه
       return await edit(
-        `🌐 <b>Aurora Mail — Website</b>\n\nلینک زیر رو باز کن تا وارد میل‌باکس بشی:\n\n<code>${WORKER_BASE}/web/api/start/${token}</code>\n\n` +
-        `🔒 این لینک فقط یه بار کار می‌کنه و ۱۰ دقیقه اعتبار داره.\n` +
-        `بعد از ورود، مرورگرتون به‌خاطر میاد و دیگه نیاز به لینک نیست.`,
-        [[{ text: "🏠 Panel", callback_data: "home" }]]);
+        `🌐 <b>Aurora Mail</b>\n\nمیل‌باکس آماده‌ست 👇`,
+        [[{ text: "📬 Open Mailbox", url: `${WORKER_BASE}/web/start/${token}` }],
+         [{ text: "🏠 Panel", callback_data: "home" }]]);
     }
 
     if (data.startsWith("inbox:")) {
@@ -1001,6 +1001,8 @@ async function handleEmail(env, message) {
       const kb = [];
       if (otp) kb.push([{ text: `🔐 کپی کد: ${otp}`, callback_data: `copyotp:${otp}` }]);
       kb.push([{ text: "📥 خواندن", callback_data: `inbox:${to}` }]);
+      // دکمه‌ی سایت: یه لمس → مستقیم میل‌باکس باز می‌شه (login_url تلگرام)
+      kb.push([{ text: "📬 Open Mailbox", login_url: { url: `${WORKER_BASE}/web/start`, request_write_access: false } }]);
       await tg(env, "sendMessage", {
         chat_id: owner.user_id,
         parse_mode: "HTML",
@@ -1108,6 +1110,35 @@ async function handleWebStart(request, env, url) {
   const db = env.DB;
   const token = url.pathname.slice("/web/start/".length);
   try { await initDB(db); } catch {}
+
+  // مسیر بدون توکن (دکمه‌ی login_url تلگرام): کاربر از initData شناسایی می‌شه
+  // تلگرام auth_date و user رو به‌صورت query می‌فرسته
+  if (!token) {
+    const initData = url.searchParams.get("auth_date") ? url.search : null;
+    const user = await verifyTelegramAuth(env, initData);
+    if (user) {
+      const st = randomToken();
+      const now = Math.floor(Date.now() / 1000);
+      await db.prepare(
+        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)"
+      ).bind(st, user.id, now, now + SESSION_MAX_AGE).run();
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "/web", "Set-Cookie": sessionCookie(st, SESSION_MAX_AGE) },
+      });
+    }
+    // احراز هویت نامعتبر — صفحه‌ی راهنما
+    const html = await getWebHtml(env);
+    return new Response(html.replace("</body>", `<script>
+      document.body.insertAdjacentHTML('beforeend',
+        '<div style="position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:999;display:grid;place-items:center;padding:30px">\\
+        <div style="text-align:center;color:#f2f2f7;font-family:sans-serif">\\
+        <div style="font-size:40px">🐴</div>\\
+        <h3 style="margin:12px 0 8px">Aurora Mail</h3>\\
+        <p style="color:#9a9aae;font-size:14px;line-height:1.6">Open the bot and press “🌐 Open Website” to enter your mailbox.</p></div></div>');
+    </script></body>`), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  }
+
   const row = await db.prepare(
     "SELECT user_id FROM sessions WHERE token = ? AND expires_at > ?"
   ).bind(token, Math.floor(Date.now() / 1000)).first();
@@ -1133,6 +1164,34 @@ async function handleWebStart(request, env, url) {
     status: 302,
     headers: { Location: "/web", "Set-Cookie": sessionCookie(st, SESSION_MAX_AGE) },
   });
+}
+
+// احراز هویت تلگرام برای login_url — مثل verifyInitData ولی برای query مستقیم
+async function verifyTelegramAuth(env, initData) {
+  if (!initData) return null;
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get("hash");
+    if (!hash) return null;
+    params.delete("hash");
+    const dataCheck = [...params.entries()]
+      .map(([k, v]) => k + "=" + v)
+      .sort()
+      .join("\n");
+    const ikm = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(env.BOT_TOKEN),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const sig = await crypto.subtle.sign("HMAC", ikm, new TextEncoder().encode(dataCheck));
+    const sigHex = [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, "0")).join("");
+    if (sigHex !== hash) return null;
+    const user = JSON.parse(params.get("user") || "{}");
+    if (!user.id) return null;
+    return user;
+  } catch { return null; }
 }
 
 // ---------- web app: API ----------
@@ -1447,8 +1506,8 @@ export default {
       envAdmins = env.ADMIN_IDS || "";
       return handleWebApi(request, env, url);
     }
-    // ورود مستقیم از مرورگر: /web/start/<token> → کوکی ست می‌کنه و ریدایرکت به /web
-    if (url.pathname.startsWith("/web/start/")) {
+    // ورود مستقیم از مرورگر: /web/start/<token> یا /web/start (login_url تلگرام)
+    if (url.pathname === "/web/start" || url.pathname.startsWith("/web/start/")) {
       return handleWebStart(request, env, url);
     }
 
